@@ -30,10 +30,14 @@ const ACTION_TARGET = {
 // and three identical silhouettes read as a loading graphic rather than as
 // this screen arriving. If the feed comes back with fewer, the surplus
 // silhouettes go at once instead of pretending there was something there.
+//
+// A card's height is its copy's, which nothing here has seen yet, so these
+// rest one body line short of the usual card and settle into whatever the
+// assistant actually wrote. See the note in screens/Money.jsx.
 const PLACEHOLDER_CARDS = [
-  { bodyLines: 2, actionWidths: [116, 88] },
-  { bodyLines: 2, actionWidths: [148] },
-  { bodyLines: 2, actionWidths: [122] },
+  { bodyLines: 1, actionWidths: [116, 88] },
+  { bodyLines: 1, actionWidths: [148] },
+  { bodyLines: 1, actionWidths: [122] },
 ];
 
 // The whole column settles to its real height in one move; only the paint is

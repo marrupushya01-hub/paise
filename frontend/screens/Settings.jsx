@@ -8,7 +8,14 @@ import { PROFILE } from "@/data/mock";
 import { useMinDuration } from "@/lib/useMinDuration";
 import { usePaise } from "@/lib/store";
 
-const ACCOUNT_ROWS = 3;
+// Resting silhouette for the account list — short of what the payload
+// usually carries on purpose. How many accounts there are is the data's to
+// say, so the shape settles into the real height rather than guessing it.
+// See the note in screens/Money.jsx.
+const ACCOUNT_SHAPES_RESTING = [
+  { meta: true, aside: "dot" },
+  { meta: false, aside: "pill" },
+];
 
 const TONE_COPY = {
   Direct: "Direct — short, no cushioning",
@@ -71,11 +78,12 @@ export default function Settings() {
             loaded={ready}
             skeleton={
               <div>
-                {Array.from({ length: ACCOUNT_ROWS }, (_, i) => (
+                {ACCOUNT_SHAPES_RESTING.map((shape, i) => (
                   <AccountRowSkeleton
                     key={i}
                     index={i}
                     settings
+                    {...shape}
                     shimmerDuration={1.4 + i * 0.08}
                   />
                 ))}
