@@ -1,0 +1,87 @@
+/* Design tokens lifted 1:1 from the Paise canvas (Paise App.dc.html). */
+:root {
+  /* Surfaces */
+  --canvas: #ece6d9;
+  --surface: #fffdf9;
+  --surface-raised: #f3eee2;
+  --field: #f8f4ea;
+  --avatar: #e9e2d2;
+
+  /* Ink */
+  --ink: #1b1a16;
+  --ink-soft: #2b2823;
+  --ink-2: #4a453d;
+  --muted: #5d574d;
+  --muted-2: #7d766a;
+  --muted-3: #6f6759;
+  --faint: #9c937e;
+  --chevron: #a29b8e;
+  --on-dark: #fdfbf6;
+  --on-green: #f4faf6;
+
+  /* Lines — the canvas uses a graded set, kept distinct on purpose */
+  --line: #eae3d5;
+  --line-warm: #e7dfcd;
+  --line-field: #e2dbc8;
+  --line-row: #f2ecdf;
+  --line-header: #f4eee1;
+  --line-inset: #eee7d9;
+  --line-strong: #ded6c3;
+  --line-input: #d7cfba;
+  --line-divider: #e3dbc8;
+  --track: #ece5d5;
+  --line-nav: #efe8da;
+
+  /* Accents */
+  --green: #2f7d58;
+  --green-hover: #276848;
+  --green-tint: #e7f0e8;
+  --green-surface: #f1f7f3;
+  --green-border: #cfe0d4;
+  --green-icon: #e2ebe4;
+  --rust: #b25f3c;
+  --indigo: #4b55a6;
+  --teal: #3b7a78;
+  --gold: #ad8228;
+  --plum: #8b4f76;
+
+  /* Type */
+  /* The three families are loaded by next/font in app/layout.jsx, which
+     exposes them as --font-dm-sans / --font-mulish / --font-instrument. */
+  --sans: var(--font-dm-sans), system-ui, sans-serif;
+  --display: var(--font-mulish), "Helvetica Neue", Helvetica, sans-serif;
+  --serif: var(--font-instrument), Georgia, serif;
+  --mono: ui-monospace, Menlo, monospace;
+
+  /* Frame */
+  --app-width: 430px;
+  --nav-height: 96px;
+
+  /* Desktop layout. Phone keeps the design's own paddings; these only
+     govern the shell and the multi-column grids above 900px. */
+  --sidebar-w: 240px;
+  --side-col: 380px;
+  --gutter: 40px;
+  --col-gap: 40px;
+  --section-gap: 40px;
+  --ask-panel-w: 460px;
+
+  /* Elevation, semantic rather than numeric. */
+  --z-sticky: 5;
+  --z-nav: 20;
+  --z-scrim: 40;
+  --z-panel: 41;
+
+  --ease-out-quart: cubic-bezier(0.25, 1, 0.5, 1);
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@media (min-width: 1280px) {
+  :root {
+    --sidebar-w: 264px;
+    --side-col: 420px;
+    --gutter: 56px;
+    --col-gap: 48px;
+    --section-gap: 48px;
+  }
+}

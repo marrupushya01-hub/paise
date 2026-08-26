@@ -1,0 +1,428 @@
+/* Desktop shell — everything below 900px keeps the phone layout untouched.
+   Same components, same type and colour vocabulary; only the structure
+   changes: bottom tab bar becomes a left sidebar, single column becomes
+   two, and the Ask sheet becomes a right slide-over. */
+
+@media (min-width: 900px) {
+  /* ─────────────────────────── shell ──────────────────────────── */
+
+  .app-canvas {
+    display: grid;
+    grid-template-columns: var(--sidebar-w) minmax(0, 1fr);
+    justify-content: stretch;
+    background: var(--canvas);
+  }
+
+  .phone,
+  .phone--with-nav {
+    max-width: none;
+    box-shadow: none;
+    padding: 0 var(--gutter) 88px;
+    min-height: 100dvh;
+  }
+
+  /* Cards get a little more room at this size; the phone's 17px reads
+     cramped once a card is 600px wide. */
+  .card { padding: 19px 21px; gap: 12px; }
+  .card--dashed { padding: 24px 22px; }
+
+  .tabbar { display: none; }
+
+  .desktop-only { display: revert; }
+  .mobile-only { display: none; }
+
+  /* ────────────────────────── sidebar ─────────────────────────── */
+
+  .sidebar {
+    display: flex;
+    flex-direction: column;
+    position: sticky;
+    top: 0;
+    height: 100dvh;
+    padding: 26px 16px 20px;
+    background: var(--canvas);
+    border-right: 1px solid var(--line-field);
+  }
+
+  .sidebar__wordmark {
+    font: 400 30px/1 var(--serif);
+    letter-spacing: -0.005em;
+    color: var(--ink);
+    padding: 0 10px;
+    margin-bottom: 34px;
+  }
+
+  .sidebar__nav {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .sidebar__item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    padding: 10px 10px;
+    border: 1px solid transparent;
+    border-radius: 12px;
+    background: none;
+    font: 500 14.5px/1 var(--sans);
+    color: var(--muted-3);
+    cursor: pointer;
+    text-align: left;
+    transition: background 0.15s ease, color 0.15s ease;
+  }
+  .sidebar__item:hover { background: #e3dcc9; color: var(--ink); }
+
+  .sidebar__item.is-active {
+    background: var(--surface);
+    border-color: var(--line-field);
+    color: var(--ink);
+  }
+
+  .sidebar__glyph {
+    width: 13px;
+    height: 13px;
+    flex: none;
+    background: currentColor;
+    color: var(--muted-2);
+  }
+  .sidebar__item.is-active .sidebar__glyph { color: var(--green); }
+  .sidebar__glyph--home { border-radius: 4px; }
+  .sidebar__glyph--money { border-radius: 50%; }
+  .sidebar__glyph--invest { width: 11px; height: 11px; transform: rotate(45deg); }
+  .sidebar__glyph--ask {
+    clip-path: polygon(50% 0%, 61% 39%, 100% 50%, 61% 61%, 50% 100%, 39% 61%, 0% 50%, 39% 39%);
+    color: var(--ink);
+  }
+
+  /* Ask opens a panel rather than navigating, so it reads as an action. */
+  .sidebar__ask {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    margin-top: 18px;
+    padding: 11px 10px;
+    border: 1px solid var(--line-field);
+    border-radius: 12px;
+    background: var(--surface);
+    font: 500 14.5px/1 var(--sans);
+    color: var(--ink);
+    cursor: pointer;
+    text-align: left;
+    transition: background 0.15s ease;
+  }
+  .sidebar__ask:hover { background: var(--field); }
+
+  .sidebar__footer {
+    margin-top: auto;
+    display: flex;
+    align-items: center;
+    gap: 11px;
+    width: 100%;
+    padding: 9px 10px;
+    border: 1px solid transparent;
+    border-radius: 12px;
+    background: none;
+    cursor: pointer;
+    text-align: left;
+    transition: background 0.15s ease;
+  }
+  .sidebar__footer:hover { background: #e3dcc9; }
+  .sidebar__footer.is-active {
+    background: var(--surface);
+    border-color: var(--line-field);
+  }
+
+  .sidebar__avatar {
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    background: #ded6c3;
+    border: 1px solid #d3cab5;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font: 600 11px var(--sans);
+    color: var(--muted-3);
+    flex: none;
+  }
+
+  .sidebar__name { display: block; font: 500 13.5px/1.2 var(--sans); color: var(--ink); }
+  .sidebar__role { display: block; font: 400 11.5px/1.2 var(--sans); color: var(--muted-2); margin-top: 3px; }
+
+  /* ───────────────────────── page header ──────────────────────── */
+
+  .screen-header {
+    padding: 30px 0 18px;
+    margin-bottom: 6px;
+  }
+
+  .screen-header__wordmark,
+  .screen-header .avatar-btn,
+  .screen-header .back-btn { display: none; }
+
+  .screen-header__title,
+  .screen-header__title--sm {
+    font: 600 30px/1 var(--display);
+    letter-spacing: -0.01em;
+  }
+
+  /* ──────────────────── two-column composition ────────────────── */
+
+  /* `.split` is display:contents on phone, so this is the only place the
+     structure actually forks. */
+  .split {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(290px, var(--side-col));
+    column-gap: var(--col-gap);
+    row-gap: 30px;
+    align-items: start;
+  }
+
+  .split--even { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+
+  .col-main,
+  .col-side {
+    display: flex;
+    flex-direction: column;
+    gap: 22px;
+    min-width: 0;
+  }
+
+  .span-all { grid-column: 1 / -1; }
+
+  /* Buttons shouldn't stretch to the column width just because the column
+     is a flex container. */
+  .col-main > .pill-soft,
+  .col-side > .pill-soft { align-self: flex-start; }
+
+  .screen-body,
+  .screen-body--wide {
+    padding: 0;
+    gap: var(--section-gap);
+  }
+
+  .insight-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 560px));
+    gap: 20px;
+    align-items: start;
+  }
+
+  /* Prose keeps its measure even when the column doesn't. */
+  .card .body-text,
+  .msg-paise { max-width: 72ch; }
+
+  /* ───────────────────────── home / first run ─────────────────── */
+
+  .figures-band { margin: 0; }
+
+  /* At this size the headline figures don't need a container to read as a
+     group — space and a single rule do it. */
+  .figures-band .stat-card {
+    background: none;
+    border: 0;
+    border-bottom: 1px solid var(--line-header);
+    border-radius: 0;
+    padding: 2px 0 28px;
+    gap: 64px;
+    align-items: flex-end;
+  }
+  .figures-band .stat-card:hover {
+    background: none;
+    border-bottom-color: var(--line-strong);
+  }
+
+  .figures-band .stat__rule { display: none; }
+  .figures-band .stat { flex: 0 0 auto; }
+  .figures-band .stat__value { font-size: 38px; margin-top: 10px; letter-spacing: -0.015em; }
+  .figures-band .stat__note { margin-top: 9px; font-size: 12.5px; }
+
+  .card-stack { padding: 0; gap: 20px; }
+
+  .feature {
+    margin: 0;
+    border: 1px solid var(--line-warm);
+    border-radius: 26px;
+    min-height: 420px;
+    padding: 32px 28px 28px;
+    position: sticky;
+    top: 28px;
+  }
+  .feature--short { min-height: 380px; padding: 32px 28px 28px; }
+  .feature__title { font-size: 34px; max-width: 15ch; }
+  .feature--short .feature__title { font-size: 32px; }
+  .feature__tag { left: 26px; top: 26px; }
+
+  .load-error { margin: 0 0 4px; }
+
+  /* ──────────────────────────── money ─────────────────────────── */
+
+  .hero-amount__value { font-size: 44px; }
+
+  /* The labels are a legend, not positions on the track, so the block stays
+     narrow instead of stretching them across 1080px of nothing. */
+  .milestones { max-width: 620px; }
+  .milestone-labels span { font-size: 10.5px; }
+
+
+  .tab { font-size: 15px; padding-bottom: 12px; }
+
+  /* Recent transactions and holdings read better slightly denser here. */
+  .tx__button { padding: 13px 0; }
+
+  /* ─────────────────────────── settings ───────────────────────── */
+
+  .settings-body {
+    max-width: 660px;
+    padding: 0;
+    gap: 34px;
+  }
+
+  /* Keep the header rule on the same measure as the settings column. */
+  .phone:has(.settings-body) .screen-header { max-width: 660px; }
+
+  .profile-row__avatar { width: 58px; height: 58px; font-size: 17px; }
+
+  .settings-body .btn-danger {
+    align-self: flex-start;
+    padding: 13px 24px;
+  }
+
+  /* ──────────────────── pre-login split layout ────────────────── */
+
+  .auth-split {
+    display: grid;
+    grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+    min-height: 100dvh;
+  }
+
+  .auth-split__brand {
+    display: grid;
+    grid-template-rows: auto 1fr auto;
+    padding: 56px 52px;
+    background: var(--canvas);
+    border-right: 1px solid var(--line-field);
+  }
+
+  .auth-split__wordmark {
+    font: 400 38px/1 var(--serif);
+    letter-spacing: -0.01em;
+  }
+
+  .auth-split__line {
+    font: 600 clamp(34px, 3.2vw, 44px) / 1.1 var(--display);
+    align-self: center;
+    margin: 0;
+    max-width: 12ch;
+    text-wrap: pretty;
+  }
+
+  .auth-split__note {
+    font: 400 13px/1.55 var(--sans);
+    color: var(--muted);
+    align-self: end;
+    margin: 0;
+    max-width: 38ch;
+  }
+
+  .auth-split__form {
+    display: flex;
+    flex: 1;
+    justify-content: center;
+    align-items: center;
+    padding: 56px 52px;
+    background: var(--surface);
+  }
+
+  /* The form column carries its own measure, so the phone screens'
+     full-bleed padding and min-height come off. */
+  .auth-split__form .phone {
+    padding: 0;
+    min-height: 0;
+    width: 100%;
+    max-width: 400px;
+    background: none;
+  }
+
+  .auth-split__form .auth,
+  .auth-split__form .stack-screen {
+    width: 100%;
+    max-width: 400px;
+    min-height: 0;
+    padding: 0;
+  }
+
+  .auth-split__form .spacer { display: none; }
+  .auth-split__form .auth__label { margin-top: 0; }
+  .auth-split__form .auth__legal { margin-top: 30px; max-width: none; }
+
+  /* Brand copy lives in the left panel at this size. */
+  .auth__brand { display: none; }
+
+  .auth-split__form .connect-screen { max-width: 760px; }
+  .auth-split__form:has(.connect-screen) .phone { max-width: 760px; }
+
+  /* Orientation for the one screen whose heading lives in the brand panel. */
+  .auth__form-title {
+    font: 600 25px/1.2 var(--display);
+    margin: 0 0 26px;
+  }
+
+  .connect-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: 12px;
+  }
+  .connect-row { padding: 16px 17px; }
+
+  .connect-screen .steps { margin-inline: 0; }
+  .connect-screen__intro { padding: 0; }
+
+  /* ─────────────────────── ask slide-over ─────────────────────── */
+
+  .sheet,
+  .sheet[data-detent="full"] {
+    left: auto;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    transform: none;
+    width: min(var(--ask-panel-w), 42vw);
+    max-width: none;
+    height: 100dvh;
+    border-radius: 26px 0 0 26px;
+    border-left: 1px solid var(--line-warm);
+    box-shadow: -22px 0 60px -30px rgba(45, 36, 20, 0.55);
+    transition: none;
+  }
+
+  .sheet.is-entering { animation: panel-in 0.34s var(--ease-out-expo); }
+  .sheet.is-closing { animation: panel-out 0.24s cubic-bezier(0.4, 0, 1, 1) forwards; }
+
+  /* No detents here: the slide-over is already full height. */
+  .sheet-scrim.is-full { opacity: 0.6; }
+  .sheet__handle { padding-top: 0; cursor: default; }
+  .sheet__grabber { display: none; }
+  .sheet__head { padding-top: 24px; }
+  .sheet__thread { padding-inline: 26px; }
+  .sheet__composer { padding: 16px 26px 24px; }
+
+  @keyframes panel-in {
+    from { transform: translateX(100%); }
+  }
+
+  @keyframes panel-out {
+    to { transform: translateX(100%); }
+  }
+}
+
+/* Above 1440px the content stops growing and sits left of a quiet margin,
+   rather than stretching figures across the whole display. */
+@media (min-width: 1440px) {
+  .phone,
+  .phone--with-nav { padding-inline: clamp(var(--gutter), 4vw, 72px); }
+}
