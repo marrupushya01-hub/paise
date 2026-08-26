@@ -1,0 +1,171 @@
+/* ──────────────────────  skeleton loading  ─────────────────────────
+   Paired with components/Skeleton.jsx. Two independent animations:
+
+   1. shimmer — a light sweep across each placeholder block, looping
+      while the data is in flight.
+   2. wipe    — a one-shot mask sweep that reveals the real content over
+      the skeleton once it arrives.
+
+   Everything is CSS so no animation library is needed; the JS only
+   listens for `animationend` to know when the wipe has finished. */
+
+.skel {
+  display: block;
+  position: relative;
+  overflow: hidden;
+  border-radius: 6px;
+  background: var(--track);
+  /* Placeholders stand in for text, so they must not collapse when the
+     caller sizes them only by height. */
+  flex: none;
+}
+
+.skel::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 253, 249, 0.9),
+    transparent
+  );
+  background-size: 200% 100%;
+  background-repeat: no-repeat;
+  animation: skel-shimmer var(--skel-shimmer, 1.5s) linear infinite;
+}
+
+@keyframes skel-shimmer {
+  from {
+    background-position: -200% 0;
+  }
+  to {
+    background-position: 200% 0;
+  }
+}
+
+/* Shape helpers — the rest of a silhouette's sizing belongs inline on the
+   skeleton component, where it sits next to the metric it's matching. */
+.skel--circle {
+  border-radius: 50%;
+}
+.skel--pill {
+  border-radius: 999px;
+}
+.skel--line {
+  border-radius: 4px;
+}
+
+/* ── stacking ──
+   Skeleton and real content occupy the same grid cell so the wipe reveals
+   one over the other with no layout shift. */
+.skel-stack {
+  display: grid;
+  align-items: start;
+}
+.skel-stack > .skel-stack__layer,
+.skel-stack > .skel-reveal {
+  grid-area: 1 / 1;
+}
+.skel-stack > .skel-reveal {
+  z-index: 1;
+}
+
+/* ── settle ──
+   A silhouette is a guess: it cannot know how many lines the real headline
+   will wrap to or how many buttons the card will carry. So before the wipe
+   runs, the stack is clamped to the content's own box and animates there
+   from the silhouette's. Shape, then reveal.
+
+   The clamp is held for the whole reveal, not just the settle — with
+   `align-items: start` above, whatever the guess got wrong would otherwise
+   sit below the content shimmering away for the length of the wipe. Height
+   and duration are set from Skeleton.jsx, which measures both layers. */
+.skel-stack[data-settling] {
+  overflow: hidden;
+  transition: height var(--skel-settle, 360ms) cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* ── wipe ──
+   Mask is 5× the element's width so its transparent→opaque→transparent
+   ramp can travel across; `mask-position` moves it. Base state is closed
+   (nothing painted); --enter opens it, --exit closes it the other way. */
+.skel-reveal {
+  --skel-mask: linear-gradient(
+    90deg,
+    transparent 22%,
+    #000 40%,
+    #000 60%,
+    transparent 78%
+  );
+  -webkit-mask-image: var(--skel-mask);
+  mask-image: var(--skel-mask);
+  -webkit-mask-size: 500% 100%;
+  mask-size: 500% 100%;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: 0% 0%;
+  mask-position: 0% 0%;
+}
+
+.skel-reveal--enter {
+  animation: skel-wipe-in 1.3s cubic-bezier(0.65, 0, 0.35, 1) forwards;
+}
+
+.skel-reveal--exit {
+  animation: skel-wipe-out 1.3s cubic-bezier(0.65, 0, 0.35, 1) forwards;
+}
+
+/* Mask dropped entirely once open: a mask left applied forever clips any
+   descendant that does its own 3D transform. */
+.skel-reveal--done {
+  -webkit-mask-image: none;
+  mask-image: none;
+}
+
+@keyframes skel-wipe-in {
+  from {
+    -webkit-mask-position: 0% 0%;
+    mask-position: 0% 0%;
+  }
+  to {
+    -webkit-mask-position: 50% 0%;
+    mask-position: 50% 0%;
+  }
+}
+
+@keyframes skel-wipe-out {
+  from {
+    -webkit-mask-position: 50% 0%;
+    mask-position: 50% 0%;
+  }
+  to {
+    -webkit-mask-position: 100% 0%;
+    mask-position: 100% 0%;
+  }
+}
+
+/* Reduced motion: no shimmer loop, no settle, and the wipe collapses to a
+   cut. The wipe's duration stays non-zero so `animationend` still fires and
+   the component still learns that the reveal is done; the settle needs no
+   such guard because Skeleton.jsx skips its wait outright. */
+@media (prefers-reduced-motion: reduce) {
+  .skel::after {
+    animation: none;
+  }
+  .skel-reveal--enter,
+  .skel-reveal--exit {
+    animation-duration: 1ms;
+  }
+  .skel-stack[data-settling] {
+    transition: none;
+  }
+}
+
+/* Text placeholders sit inside a box the height of the real line, with the
+   bar itself the height of the glyphs — so a silhouette occupies exactly
+   the space the text will, and nothing shifts on reveal. */
+.skel-line-box {
+  display: flex;
+  align-items: center;
+}
