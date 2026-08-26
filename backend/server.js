@@ -237,7 +237,7 @@ function buildInsights(tone) {
       body: direct
         ? "Cult, Spotify and Prime. ₹1,847 gone before you noticed."
         : "Cult, Spotify and Prime each billed twice, ₹1,847 in total. Easy to miss.",
-      actions: ["Cancel a subscription"],
+      actions: ["Show the charges"],
     },
     {
       id: "sip-vs-fd",
