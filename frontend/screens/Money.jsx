@@ -7,7 +7,7 @@ import AppShell from "@/components/AppShell";
 import ScreenHeader from "@/components/ScreenHeader";
 import ShareBar from "@/components/ShareBar";
 import StatPair from "@/components/StatPair";
-import { SkeletonSwap } from "@/components/Skeleton";
+import { SkeletonGroup, SkeletonSwap } from "@/components/Skeleton";
 import AccountRowSkeleton from "@/components/skeletons/AccountRowSkeleton";
 import CategoryRowSkeleton from "@/components/skeletons/CategoryRowSkeleton";
 import HeroAmountSkeleton from "@/components/skeletons/HeroAmountSkeleton";
@@ -27,9 +27,42 @@ import { useMinDuration } from "@/lib/useMinDuration";
 import { usePaise } from "@/lib/store";
 
 // Rows to draw while the fetch is in flight, per list.
-const TX_ROWS = 4;
-const ACCOUNT_ROWS = 3;
-const CATEGORY_ROWS = 5;
+//
+// These are *resting* counts, deliberately short of what the payload
+// usually carries. A list's height belongs to its data, and none of it is
+// known yet — so rather than hardcode a guess that happens to match today's
+// payload and silently breaks when it returns eight transactions instead of
+// six, the silhouette shows a short representative list and the settle
+// grows it into the real one. The shape resolving is the point: it reads as
+// the section taking its size, and it is correct for any count.
+//
+// Sections whose height the design fixes (the hero figure, the milestones
+// bar, the figure pairs) draw themselves exactly and never settle.
+const TX_ROWS_RESTING = 4;
+const CATEGORY_ROWS_RESTING = 3;
+
+// The account list is three kinds of row, not one repeated: a connected
+// account (meta line + status dot), each of the first two still waiting
+// (one line + Connect button), and a summary row for whatever is left. The
+// resting silhouette shows the first three of those.
+const ACCOUNT_SHAPES_RESTING = [
+  { meta: true, aside: "dot" },
+  { meta: true, aside: "dot" },
+  { meta: false, aside: "pill" },
+];
+
+// Sections reveal in reading order rather than all on the same frame. Same
+// step as Home, so the two screens read as one app. The settle that precedes
+// them is shared across the whole screen (see <SkeletonGroup> below), so a
+// section that has to resize can't jump the queue.
+const REVEAL_STEP = 110;
+const REVEAL = {
+  hero: 0,
+  milestones: REVEAL_STEP,
+  figures: REVEAL_STEP * 2,
+  list: REVEAL_STEP * 3,
+  side: REVEAL_STEP * 4,
+};
 
 // A list that pulses in lockstep reads as one object; the jitter keeps the
 // rows reading as rows.
@@ -65,75 +98,89 @@ export default function Money({ initialTab = "flow" }) {
     <AppShell tabBar>
       <ScreenHeader title="Money" />
 
-      <div className="screen-body">
-        <SkeletonSwap loaded={ready} skeleton={<HeroAmountSkeleton />}>
-          <section>
-            <div className="eyebrow">net worth</div>
-            <div className="hero-amount">
-              <div className="hero-amount__value">
-                {userData ? money(userData.netWorth) : "— — —"}
+      {/* One settle for the whole screen, then a single top-down reveal:
+          without the shared clock the lists, which have the most shape to
+          correct, start their wipe after the sections above them have
+          finished theirs. */}
+      <SkeletonGroup>
+        <div className="screen-body">
+          <SkeletonSwap
+            loaded={ready}
+            delay={REVEAL.hero}
+            skeleton={<HeroAmountSkeleton />}
+          >
+            <section>
+              <div className="eyebrow">net worth</div>
+              <div className="hero-amount">
+                <div className="hero-amount__value">
+                  {userData ? money(userData.netWorth) : "— — —"}
+                </div>
+                <button
+                  type="button"
+                  className="hero-amount__toggle"
+                  onClick={togglePrivacyMode}
+                >
+                  {hidden ? "SHOW" : "HIDE"}
+                </button>
               </div>
-              <button
-                type="button"
-                className="hero-amount__toggle"
-                onClick={togglePrivacyMode}
-              >
-                {hidden ? "SHOW" : "HIDE"}
-              </button>
-            </div>
-            <div className="delta-row">
-              <span
-                className={`delta-chip${changePct < 0 ? " delta-chip--down" : ""}`}
-              >
-                {pct(changePct)}
-              </span>
-              <span className="delta-note">{money(change)} this month</span>
-            </div>
-          </section>
-        </SkeletonSwap>
+              <div className="delta-row">
+                <span
+                  className={`delta-chip${changePct < 0 ? " delta-chip--down" : ""}`}
+                >
+                  {pct(changePct)}
+                </span>
+                <span className="delta-note">{money(change)} this month</span>
+              </div>
+            </section>
+          </SkeletonSwap>
 
-        <SkeletonSwap loaded={ready} skeleton={<MilestonesSkeleton />}>
-          <Milestones milestones={userData?.netWorthMilestones} />
-        </SkeletonSwap>
+          <SkeletonSwap
+            loaded={ready}
+            delay={REVEAL.milestones}
+            skeleton={<MilestonesSkeleton />}
+          >
+            <Milestones milestones={userData?.netWorthMilestones} />
+          </SkeletonSwap>
 
-        <div className="tabs" role="tablist">
-          <button
-            type="button"
-            role="tab"
-            aria-selected={tab === "flow"}
-            className={`tab${tab === "flow" ? " is-active" : ""}`}
-            onClick={() => setTab("flow")}
-          >
-            Cash flow
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={tab === "insights"}
-            className={`tab${tab === "insights" ? " is-active" : ""}`}
-            onClick={() => setTab("insights")}
-          >
-            Insights
-          </button>
+          <div className="tabs" role="tablist">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={tab === "flow"}
+              className={`tab${tab === "flow" ? " is-active" : ""}`}
+              onClick={() => setTab("flow")}
+            >
+              Cash flow
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={tab === "insights"}
+              className={`tab${tab === "insights" ? " is-active" : ""}`}
+              onClick={() => setTab("insights")}
+            >
+              Insights
+            </button>
+          </div>
+
+          {tab === "flow" ? (
+            <CashFlow
+              userData={userData}
+              money={money}
+              hidden={hidden}
+              openAsk={openAsk}
+              ready={ready}
+            />
+          ) : (
+            <Insights
+              userData={userData}
+              money={money}
+              openAsk={openAsk}
+              ready={ready}
+            />
+          )}
         </div>
-
-        {tab === "flow" ? (
-          <CashFlow
-            userData={userData}
-            money={money}
-            hidden={hidden}
-            openAsk={openAsk}
-            ready={ready}
-          />
-        ) : (
-          <Insights
-            userData={userData}
-            money={money}
-            openAsk={openAsk}
-            ready={ready}
-          />
-        )}
-      </div>
+      </SkeletonGroup>
     </AppShell>
   );
 }
@@ -186,7 +233,11 @@ function CashFlow({ userData, money, hidden, openAsk, ready }) {
   return (
     <div className="split">
       <div className="col-main">
-        <SkeletonSwap loaded={ready} skeleton={<StatPairSkeleton tight />}>
+        <SkeletonSwap
+          loaded={ready}
+          delay={REVEAL.figures}
+          skeleton={<StatPairSkeleton tight />}
+        >
           <StatPair
             tight
             left={{
@@ -216,9 +267,10 @@ function CashFlow({ userData, money, hidden, openAsk, ready }) {
 
           <SkeletonSwap
             loaded={ready}
+            delay={REVEAL.list}
             skeleton={
               <div>
-                {Array.from({ length: TX_ROWS }, (_, i) => (
+                {Array.from({ length: TX_ROWS_RESTING }, (_, i) => (
                   <TxRowSkeleton
                     key={i}
                     index={i}
@@ -302,12 +354,14 @@ function CashFlow({ userData, money, hidden, openAsk, ready }) {
         </div>
         <SkeletonSwap
           loaded={ready}
+          delay={REVEAL.side}
           skeleton={
             <div>
-              {Array.from({ length: ACCOUNT_ROWS }, (_, i) => (
+              {ACCOUNT_SHAPES_RESTING.map((shape, i) => (
                 <AccountRowSkeleton
                   key={i}
                   index={i}
+                  {...shape}
                   shimmerDuration={shimmer(i)}
                 />
               ))}
@@ -370,7 +424,11 @@ function Insights({ userData, money, openAsk, ready }) {
   return (
     <div className="split">
       <div className="col-main">
-        <SkeletonSwap loaded={ready} skeleton={<StatPairSkeleton tight />}>
+        <SkeletonSwap
+          loaded={ready}
+          delay={REVEAL.figures}
+          skeleton={<StatPairSkeleton tight />}
+        >
           <StatPair
             tight
             left={{
@@ -398,11 +456,12 @@ function Insights({ userData, money, openAsk, ready }) {
           </div>
           <SkeletonSwap
             loaded={ready}
+            delay={REVEAL.list}
             skeleton={
               <div>
                 <ShareBarSkeleton />
                 <div style={{ marginTop: 14 }}>
-                  {Array.from({ length: CATEGORY_ROWS }, (_, i) => (
+                  {Array.from({ length: CATEGORY_ROWS_RESTING }, (_, i) => (
                     <CategoryRowSkeleton
                       key={i}
                       index={i}
