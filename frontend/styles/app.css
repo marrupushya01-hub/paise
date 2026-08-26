@@ -45,6 +45,15 @@ button { font-family: var(--sans); }
   position: relative;
   color: var(--ink);
   box-shadow: 0 0 0 1px var(--line-field);
+  /* Contains the page transition. A screen entering from the right sits
+     18px past this column for the length of the slide, which is enough to
+     widen the document and pop a horizontal scrollbar — and a scrollbar
+     appearing shortens the layout viewport, so the fixed tab bar lifts by
+     its thickness and drops back when the animation ends. `clip` rather
+     than `hidden`: it never becomes a scroll container, so the sticky
+     screen header and desktop feature panel keep resolving against the
+     viewport. */
+  overflow-x: clip;
 }
 
 /* Space for the fixed tab bar, only on screens that show it. */
