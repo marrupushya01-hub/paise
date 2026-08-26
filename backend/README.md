@@ -1,4 +1,4 @@
-# Paise backend prototype
+# paise backend 
 
 A small Express API serving the mock data used by the Paise wireframes:
 net worth, cash flow, category breakdown, and an "Ask Paise" endpoint.
