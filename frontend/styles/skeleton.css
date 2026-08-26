@@ -108,6 +108,21 @@
   mask-position: 0% 0%;
 }
 
+/* The wipe reveals content *over* the silhouette, so the content has to
+   occlude it. Card content already does — `.card` and `.stat-card` carry
+   their own surface — but a section that is just a heading and some rows
+   paints nothing between its glyphs, and the silhouette shows through the
+   gaps for the whole 1.3s. So the reveal layer brings its own ground, and
+   the mask's alpha ramp sweeps it in along with the content.
+
+   Only while the mask is applied: once open the silhouette is gone and a
+   permanent fill would be an opaque rectangle on whatever sits behind it.
+   Override `--skel-ground` on the stack if it ever sits on another
+   surface — every one of them is on `.phone` today. */
+.skel-reveal:not(.skel-reveal--done) {
+  background: var(--skel-ground, var(--surface));
+}
+
 .skel-reveal--enter {
   animation: skel-wipe-in 1.3s cubic-bezier(0.65, 0, 0.35, 1) forwards;
 }
