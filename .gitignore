@@ -1,8 +1,38 @@
+# dependencies
 node_modules/
+
+# env files — never commit real secrets
 .env
 .env.*
 !.env.example
+
+# logs
 npm-debug.log*
-.DS_Store
+yarn-debug.log*
+yarn-error.log*
+logs/
+*.log
+
+# test coverage
+coverage/
+.nyc_output/
+
+# build / pack artefacts
 dist/
 build/
+*.tgz
+
+# OS-generated files
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# editor
+.vscode/
+.idea/
+
+# Node runtime artefacts
+pids/
+*.pid
+*.seed

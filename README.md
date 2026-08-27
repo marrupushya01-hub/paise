@@ -1,4 +1,4 @@
-# Paise
+# paise
 
 Personal finance app — "safe to spend", cash flow, category insights,
 and an AI assistant ("Ask Paise") over your accounts.
