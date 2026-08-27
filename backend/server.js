@@ -13,13 +13,17 @@
 //
 // This is still a prototype: there's no real auth/session/user model,
 // no database, and the "AI" endpoint is a stub unless you supply your
-// own ANTHROPIC_API_KEY. See README-backend.md before using this for
+// own ANTHROPIC_API_KEY. See README.md before using this for
 // anything beyond a local demo.
+
+// Load .env before any process.env reads.
+import "dotenv/config";
 
 import express from "express";
 import cors from "cors";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
+import morgan from "morgan";
 
 const PORT = Number(process.env.PORT) || 4000;
 const API_KEY = process.env.PAISE_API_KEY || null;
@@ -27,6 +31,9 @@ const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || "http://localhost:3000")
   .split(",")
   .map((s) => s.trim())
   .filter(Boolean);
+// Model used for /api/ask — override via ANTHROPIC_MODEL in .env.
+// See .env.example for a link to valid model IDs.
+const ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL || "claude-sonnet-4-5";
 
 if (!API_KEY) {
   console.warn(
@@ -40,6 +47,11 @@ const app = express();
 // Behind a proxy (Render, Fly, nginx, etc.) this makes req.ip and the
 // rate limiter see the real client IP instead of the proxy's.
 app.set("trust proxy", 1);
+
+// ---------------------------------------------------------------------------
+// Request logging (dev-only style; swap to "combined" for production)
+// ---------------------------------------------------------------------------
+app.use(morgan("dev"));
 
 // ---------------------------------------------------------------------------
 // Security headers
@@ -262,7 +274,29 @@ app.get("/api/user-data", requireApiKey, (req, res) => {
   const privacyMode = req.query.privacy === "true";
   if (!privacyMode) return res.json(MOCK_USER_DATA);
 
-  const masked = { ...MOCK_USER_DATA, netWorth: null, safeToSpend: null, spentThisMonth: null };
+  // Privacy mode: mask all fields that reveal specific financial figures or
+  // identify merchants/amounts in transactions and categories.
+  const masked = {
+    ...MOCK_USER_DATA,
+    netWorth: null,
+    netWorthChangeThisMonth: null,
+    safeToSpend: null,
+    spentThisMonth: null,
+    spentVsLastMonth: null,
+    monthEndForecast: null,
+    // Replace each transaction with amount/merchant hidden
+    recentTransactions: MOCK_USER_DATA.recentTransactions.map((t) => ({
+      ...t,
+      merchant: "***",
+      amount: null,
+    })),
+    // Replace category amounts so the breakdown can't reveal spending
+    categories: MOCK_USER_DATA.categories.map((c) => ({
+      ...c,
+      amount: null,
+      pct: null,
+    })),
+  };
   res.json(masked);
 });
 
@@ -333,7 +367,7 @@ app.post("/api/ask", requireApiKey, askLimiter, async (req, res, next) => {
           "anthropic-version": "2023-06-01",
         },
         body: JSON.stringify({
-          model: "claude-sonnet-4-6",
+          model: ANTHROPIC_MODEL,
           max_tokens: 400,
           system:
             "You are Paise, a concise personal-finance assistant. Answer using only the " +
@@ -342,10 +376,28 @@ app.post("/api/ask", requireApiKey, askLimiter, async (req, res, next) => {
           messages: [
             {
               role: "user",
+              // Send a lean context object — only the fields needed to answer
+              // finance questions — rather than the full internal data structure.
               content:
-                `User's financial snapshot: ${JSON.stringify(MOCK_USER_DATA)}\n\n` +
-                `Detected subscriptions: ${JSON.stringify(MOCK_SUBSCRIPTIONS)}\n\n` +
-                `Question: ${question}`,
+                `User's financial snapshot:\n${JSON.stringify({
+                  netWorth: MOCK_USER_DATA.netWorth,
+                  safeToSpend: MOCK_USER_DATA.safeToSpend,
+                  safeToSpendUntil: MOCK_USER_DATA.safeToSpendUntil,
+                  spentThisMonth: MOCK_USER_DATA.spentThisMonth,
+                  monthlyBudget: MOCK_USER_DATA.monthlyBudget,
+                  spentVsLastMonth: MOCK_USER_DATA.spentVsLastMonth,
+                  monthEndForecast: MOCK_USER_DATA.monthEndForecast,
+                  topCategories: MOCK_USER_DATA.categories.map((c) => ({
+                    name: c.name,
+                    amount: c.amount,
+                    pct: c.pct,
+                  })),
+                  subscriptions: MOCK_SUBSCRIPTIONS.map((s) => ({
+                    name: s.name,
+                    amount: s.amount,
+                    cadence: s.cadence,
+                  })),
+                })}\n\nQuestion: ${question}`,
             },
           ],
         }),
