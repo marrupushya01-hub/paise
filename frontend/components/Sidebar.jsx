@@ -1,7 +1,6 @@
 "use client";
 
 import { usePathname, useRouter } from "next/navigation";
-import { PROFILE } from "@/data/mock";
 import { usePaise } from "@/lib/store";
 
 const ITEMS = [
@@ -15,7 +14,7 @@ const ITEMS = [
 export default function Sidebar() {
   const router = useRouter();
   const pathname = usePathname();
-  const { openAsk } = usePaise();
+  const { openAsk, profile } = usePaise();
 
   return (
     <nav className="sidebar" aria-label="Main">
@@ -50,9 +49,9 @@ export default function Sidebar() {
         aria-current={pathname === "/settings" ? "page" : undefined}
         onClick={() => router.push("/settings")}
       >
-        <span className="sidebar__avatar">{PROFILE.initials}</span>
+        <span className="sidebar__avatar">{profile?.initials ?? ""}</span>
         <span>
-          <span className="sidebar__name">{PROFILE.name}</span>
+          <span className="sidebar__name">{profile?.name ?? "Your account"}</span>
           <span className="sidebar__role">Settings</span>
         </span>
       </button>

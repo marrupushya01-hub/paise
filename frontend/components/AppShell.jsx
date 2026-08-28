@@ -1,5 +1,7 @@
 "use client";
 
+import { useEffect } from "react";
+import { useRouter } from "next/navigation";
 import { usePaise } from "@/lib/store";
 import AskSheet from "./AskSheet";
 import PageMotion from "./PageMotion";
@@ -13,8 +15,21 @@ import TabBar from "./TabBar";
 // `tabBar` is the phone-only bottom bar: Settings is reached from the avatar
 // on phone and from the sidebar on desktop, so it takes the sidebar without
 // the bar.
+//
+// It is also the gate. Every screen that shows money is inside this component,
+// so this is the one place that has to know whether there is a session — the
+// screens themselves never check. `auth === "unknown"` is the frame or two
+// before the stored token has been checked; rendering nothing there is what
+// keeps a signed-in reload from flashing the sign-in screen on its way back.
 export default function AppShell({ children, tabBar = false }) {
-  const { askOpen } = usePaise();
+  const { askOpen, auth } = usePaise();
+  const router = useRouter();
+
+  useEffect(() => {
+    if (auth === "anon") router.replace("/login");
+  }, [auth, router]);
+
+  if (auth !== "authed") return null;
 
   return (
     <div className="app-canvas">

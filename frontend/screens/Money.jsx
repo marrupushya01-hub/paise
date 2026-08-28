@@ -15,13 +15,7 @@ import MilestonesSkeleton from "@/components/skeletons/MilestonesSkeleton";
 import ShareBarSkeleton from "@/components/skeletons/ShareBarSkeleton";
 import StatPairSkeleton from "@/components/skeletons/StatPairSkeleton";
 import TxRowSkeleton from "@/components/skeletons/TxRowSkeleton";
-import {
-  CATEGORY_COLORS,
-  MONEY_IN,
-  MONEY_INSIGHTS,
-  TX_DETAIL,
-} from "@/data/mock";
-import { pct, shortDate, signedRupees } from "@/lib/format";
+import { cardDate, pct, shortDate, signedRupees } from "@/lib/format";
 import { useDismissed } from "@/lib/useDismissed";
 import { useMinDuration } from "@/lib/useMinDuration";
 import { usePaise } from "@/lib/store";
@@ -83,7 +77,7 @@ function monthName(iso, offset = 0) {
 
 export default function Money({ initialTab = "flow" }) {
   const [tab, setTab] = useState(initialTab);
-  const { userData, settings, status, togglePrivacyMode, money, openAsk } =
+  const { userData, screenInsights, settings, status, togglePrivacyMode, money, openAsk } =
     usePaise();
   // `!== "loading"` so a failed fetch drops the skeleton instead of
   // shimmering behind an error that never resolves.
@@ -174,6 +168,7 @@ export default function Money({ initialTab = "flow" }) {
           ) : (
             <Insights
               userData={userData}
+              cards={screenInsights.money}
               money={money}
               openAsk={openAsk}
               ready={ready}
@@ -217,12 +212,14 @@ function CashFlow({ userData, money, hidden, openAsk, ready }) {
   const router = useRouter();
   const [openTx, setOpenTx] = useState(null);
 
+  // The expanded row's copy arrives on the transaction itself now, rather
+  // than being looked up in a hardcoded table keyed by merchant name.
   const transactions = (userData?.recentTransactions || []).map((tx, i) => ({
     ...tx,
-    ...(TX_DETAIL[tx.merchant] || {}),
+    ...(tx.detail || {}),
     index: i,
-    initial: TX_DETAIL[tx.merchant]?.initial || tx.merchant[0],
-    color: TX_DETAIL[tx.merchant]?.color || "#3b3733",
+    initial: tx.detail?.initial || tx.merchant[0],
+    color: tx.detail?.color || "#3b3733",
   }));
 
   const accounts = userData?.connectedAccounts || [];
@@ -242,8 +239,8 @@ function CashFlow({ userData, money, hidden, openAsk, ready }) {
             tight
             left={{
               label: "money in",
-              value: money(MONEY_IN.amount),
-              note: MONEY_IN.note,
+              value: userData ? money(userData.moneyIn?.amount) : "— — —",
+              note: userData?.moneyIn?.note,
               noteTone: "up",
             }}
             right={{
@@ -411,7 +408,7 @@ function CashFlow({ userData, money, hidden, openAsk, ready }) {
   );
 }
 
-function Insights({ userData, money, openAsk, ready }) {
+function Insights({ userData, cards, money, openAsk, ready }) {
   const dismissed = useDismissed();
   const categories = userData?.categories || [];
   const spent = userData?.spentThisMonth ?? 0;
@@ -477,7 +474,7 @@ function Insights({ userData, money, openAsk, ready }) {
                 segments={categories.map((c) => ({
                   key: c.slug,
                   share: c.pct,
-                  color: CATEGORY_COLORS[c.slug] || "var(--muted-2)",
+                  color: c.color || "var(--muted-2)",
                 }))}
               />
               <div style={{ marginTop: 14 }}>
@@ -489,10 +486,7 @@ function Insights({ userData, money, openAsk, ready }) {
                   >
                     <span
                       className="swatch"
-                      style={{
-                        background:
-                          CATEGORY_COLORS[category.slug] || "var(--muted-2)",
-                      }}
+                      style={{ background: category.color || "var(--muted-2)" }}
                     />
                     <div className="list-row__body">
                       <div className="list-row__name">{category.name}</div>
@@ -515,10 +509,10 @@ function Insights({ userData, money, openAsk, ready }) {
       </div>
 
       <div className="col-side">
-        {dismissed.keep(MONEY_INSIGHTS).map((insight) => (
+        {dismissed.keep(cards).map((insight) => (
           <InsightCard
             key={insight.id}
-            date={insight.date}
+            date={cardDate(insight.date)}
             headline={insight.headline}
             body={insight.body}
             actions={insight.actions.map((label, i) => ({

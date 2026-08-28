@@ -4,7 +4,6 @@ import { useRouter } from "next/navigation";
 import AppShell from "@/components/AppShell";
 import { SkeletonSwap } from "@/components/Skeleton";
 import AccountRowSkeleton from "@/components/skeletons/AccountRowSkeleton";
-import { PROFILE } from "@/data/mock";
 import { useMinDuration } from "@/lib/useMinDuration";
 import { usePaise } from "@/lib/store";
 
@@ -34,7 +33,7 @@ const FLOW_STATES = [
 
 export default function Settings() {
   const router = useRouter();
-  const { userData, settings, status, togglePrivacyMode, toggleTone } =
+  const { userData, profile, settings, status, togglePrivacyMode, toggleTone, signOut } =
     usePaise();
   const ready = useMinDuration(status !== "loading");
 
@@ -63,11 +62,11 @@ export default function Settings() {
 
       <div className="settings-body">
         <div className="profile-row">
-          <span className="profile-row__avatar">{PROFILE.initials}</span>
+          <span className="profile-row__avatar">{profile?.initials ?? ""}</span>
           <span style={{ flex: 1 }}>
-            <span className="profile-row__name">{PROFILE.name}</span>
+            <span className="profile-row__name">{profile?.name ?? "Your account"}</span>
             <span className="profile-row__meta">
-              {PROFILE.phone} · age {PROFILE.age}
+              {profile ? `${profile.phone} · age ${profile.age}` : "—"}
             </span>
           </span>
         </div>
@@ -130,7 +129,7 @@ export default function Settings() {
             <div className="list-row__body">
               <div className="list-row__name">Hide balances</div>
               <div className="list-row__meta">
-                Masks every number until you tap
+                Masked before the figures are sent, on every device
               </div>
             </div>
             <button
@@ -200,7 +199,12 @@ export default function Settings() {
           type="button"
           className="btn-danger"
           style={{ marginBottom: 8 }}
-          onClick={() => router.push("/login")}
+          onClick={async () => {
+            // Destroys the session on the server too, not just this tab's copy
+            // of the token.
+            await signOut();
+            router.replace("/login");
+          }}
         >
           Log out
         </button>
