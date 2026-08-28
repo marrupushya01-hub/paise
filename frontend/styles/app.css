@@ -453,12 +453,30 @@ button { font-family: var(--sans); }
   cursor: pointer;
 }
 
+/* A button now that "resend" actually requests a new code. It keeps the
+   design's plain-label look — no chrome, just the label going live. */
 .otp-resend {
   font: 500 12px/1 var(--mono);
   color: var(--muted-2);
   margin-top: 18px;
   letter-spacing: 0.04em;
+  align-self: flex-start;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
 }
+.otp-resend:disabled { cursor: default; }
+.otp-resend:not(:disabled) { color: var(--ink); text-decoration: underline; }
+
+/* Inline validation and sign-in failures. Sized to sit under the field it
+   belongs to without shifting the button below it more than one line. */
+.auth__error {
+  font: 400 13px/1.45 var(--sans);
+  color: var(--rust);
+  margin: 10px 0 0;
+}
+.auth__error--muted { color: var(--muted); }
 
 /* ──────────────────────────  onboarding  ────────────────────────── */
 
