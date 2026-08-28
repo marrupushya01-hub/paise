@@ -484,32 +484,6 @@ sqlite3 backend/paise.db 'SELECT token_hash FROM sessions LIMIT 1'
 
 </details>
 
-### Not shipped — the part that would make this real
-
-None of the following is in this repository. It is here so the gap is legible
-rather than implied, and because for a prototype the honest list is the more
-useful document.
-
-| Area | What production needs | Where Paise is |
-|---|---|---|
-| **Transport** | TLS everywhere, HSTS, cert pinning on mobile | Plain `http://` on a LAN. No TLS of its own |
-| **Token storage** | `httpOnly` `Secure` `SameSite` cookie, or platform keystore | `localStorage`, because the API is a different origin over plain HTTP. A XSS bug would reach the token. Behind TLS this is a one-file change |
-| **Code delivery** | A real SMS or WhatsApp gateway, with delivery receipts | The server terminal, or the response body in demo mode |
-| **Identity** | KYC, an RBI-licensed account aggregator, consent artefacts with expiry | Any valid number gets an account seeded with a fixture |
-| **Data at rest** | Encrypted volumes, per-field encryption for PII, a managed KMS | An unencrypted SQLite file with `0644` on your laptop |
-| **Secrets** | A vault with rotation and audit | Environment variables, or one generated row in the database |
-| **Rate limiting** | Redis-backed, shared across instances | In-process memory. Single instance only |
-| **Sessions** | Rotation on privilege change, device binding, anomaly detection | Fixed 24h token, revocable but not rotated |
-| **Audit** | Append-only, tamper-evident log of every read of financial data | `morgan("dev")` to stdout |
-| **Testing** | Unit and integration tests over the auth path, dependency and secret scanning in CI | No tests. `npm test` is `echo "No tests yet"`. **The most expensive gap on this page** |
-| **Operations** | Backups, restore drills, key rotation, an incident process | Delete the file and start over |
-
-**Do not put this on the public internet.** If you must expose it, the minimum
-is: TLS in front, `ALLOW_LAN_ORIGINS=false`, `OTP_DELIVERY=log`, an explicit
-`PAISE_AUTH_SECRET`, and a reverse proxy doing rate limiting of its own.
-
----
-
 ## ⚠️ Known limitations
 
 Eight of the original twelve are closed — see the table at the end of
