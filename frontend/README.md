@@ -8,13 +8,17 @@ lay out for a desktop window. One app at two densities, not two products.
 
 ```bash
 npm install
-cp .env.example .env.local   # only needed if you change the API URL/key
+cp .env.example .env.local   # only needed if you change the API URL/port
 npm run dev                  # http://localhost:3000
 ```
 
 The backend must be running too — `cd ../backend && npm start`. Port 3000 is
 not arbitrary: it's the origin the backend's CORS allowlist permits by
 default.
+
+There is no credential in this bundle. Auth is a session token the backend
+mints at sign-in and `lib/session.js` holds per browser; the shared
+`NEXT_PUBLIC_PAISE_API_KEY` that used to be compiled in is gone.
 
 ## Routes
 
@@ -25,8 +29,8 @@ default.
 | `/invest`   | Invest — portfolio, holdings, SIPs, goals                 |
 | `/settings` | Settings — accounts, privacy, assistant tone              |
 | `/empty`    | First run, nothing connected                              |
-| `/login`    | Phone entry                                               |
-| `/otp`      | Code entry                                                |
+| `/login`    | Phone entry — `POST /api/auth/request-otp`                |
+| `/otp`      | Code entry — `POST /api/auth/verify-otp`, mints the session|
 | `/profile`  | Onboarding step 2                                         |
 | `/connect`  | Onboarding step 3 — account aggregator sources            |
 
@@ -38,15 +42,21 @@ on, opened from the tab bar or any card's primary action.
 
 | Screen data                                              | Source                    |
 |----------------------------------------------------------|---------------------------|
-| Net worth, safe-to-spend, milestones, categories, transactions, accounts | `GET /api/user-data` |
+| Net worth, safe-to-spend, milestones, categories, transactions (with their expanded detail), "money in", accounts | `GET /api/user-data` |
+| Portfolio, holdings, active SIPs, goals                  | `GET /api/portfolio`      |
+| Name, initials, phone, age                               | `GET /api/profile`        |
 | Home assistant cards (copy changes with tone)            | `GET /api/insights?tone=` |
+| Money and Invest assistant cards                         | `GET /api/screen-insights?screen=` |
+| Cards closed with "Not now"                              | `GET/POST /api/dismissed` |
+| Hide balances, tone                                      | `GET/PATCH /api/settings` |
 | Ask sheet's Jun/Jul/Aug chart                            | `GET /api/spending-trend` |
-| Ask sheet answers                                        | `POST /api/ask`           |
-| Holdings, SIPs, goals, transaction detail copy, "money in" | `data/mock.js`          |
+| Ask sheet answers (streamed)                             | `POST /api/ask`           |
+| The editorial feature card and the Ask sheet's seed thread | `data/mock.js`          |
 
-`data/mock.js` exists because the design shows content the prototype backend
-doesn't serve yet. When those endpoints land, delete from that file and fetch
-instead — nothing else needs to change.
+`data/mock.js` is down to 42 lines, and none of it is account data — holdings,
+SIPs, goals, transaction detail copy, the profile and the category colours all
+come from the API now. What's left is design content that isn't anybody's
+money: the feature card, and the seeded exchange the Ask sheet opens on.
 
 Two figures that look interchangeable are not: `safeToSpend` (day-to-day, on
 Home and the Cash flow tab) and `monthEndForecast.remaining` (the burn-rate
@@ -57,11 +67,18 @@ out; keep them separate.
 
 - **Hide balances** masks every figure as `₹ • • •`. It's the design's
   `privacyMode` prop, and the `HIDE` / `SHOW` toggles on Money and Invest
-  flip the same switch.
+  flip the same switch. It is enforced on the server: with it on, the hidden
+  figures come back as `null` and are refetched when you flip it, so devtools
+  has nothing to see through.
 - **Tone** swaps the assistant between Direct and Warm, refetching
   `/api/insights` with the new tone.
+- **Not now** on an assistant card now outlives the session — the id goes to
+  `/api/dismissed` and the card stays gone across reloads and devices.
 
-Both persist to `localStorage` under `paise.settings`.
+Both settings belong to the account, not the browser: they're written through
+to `PATCH /api/settings`. `localStorage["paise.settings"]` is only a
+first-paint cache so a reload doesn't flash the wrong tone; the server's copy
+wins as soon as `/api/auth/me` answers.
 
 ## Layout
 
@@ -97,8 +114,14 @@ palette and type scale in `styles/tokens.css`. Values are the canvas's own
 
 ## Not built yet
 
-- Real auth. `/login` → `/otp` → `/profile` → `/connect` accept any input and
-  just advance; there's no session, and the backend has no user model.
+- Real code delivery. `/login` → `/otp` is a genuine challenge now — the code
+  is generated, hashed, expiring, single-use and attempt-capped — but there is
+  no SMS gateway behind it, so the code arrives in the backend terminal (or in
+  the response body when the backend runs `OTP_DELIVERY=response`). `/profile`
+  and `/connect` are still navigation only.
+- The token lives in `localStorage` rather than an httpOnly cookie, because the
+  API is a different origin over plain HTTP on a LAN demo. Behind TLS that
+  becomes a one-file change in `lib/session.js`.
 - Non-navigating buttons: Edit profile, Recategorise, Split, See all,
   Add a goal, Data & consents, Delete my data, Notifications.
 - The editorial photo slot on Home and first-run is the design's hatched
