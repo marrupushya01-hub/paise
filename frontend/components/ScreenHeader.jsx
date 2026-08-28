@@ -1,13 +1,14 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { PROFILE } from "@/data/mock";
+import { usePaise } from "@/lib/store";
 
 // Sticky page header. On phone it carries the serif wordmark (Home) or the
 // screen name, plus the avatar shortcut to Settings. On desktop the wordmark
 // and avatar live in the sidebar, so only the page title remains.
 export default function ScreenHeader({ title, wordmark = false }) {
   const router = useRouter();
+  const { profile } = usePaise();
 
   return (
     <header className="screen-header">
@@ -19,7 +20,7 @@ export default function ScreenHeader({ title, wordmark = false }) {
         aria-label="Settings"
         onClick={() => router.push("/settings")}
       >
-        {PROFILE.initials}
+        {profile?.initials ?? ""}
       </button>
     </header>
   );

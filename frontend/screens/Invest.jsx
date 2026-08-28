@@ -7,25 +7,34 @@ import ShareBar from "@/components/ShareBar";
 import StatPair from "@/components/StatPair";
 import { Skeleton, SkeletonSwap } from "@/components/Skeleton";
 import StatPairSkeleton from "@/components/skeletons/StatPairSkeleton";
-import {
-  ACTIVE_SIPS,
-  GOALS,
-  HOLDINGS,
-  INVEST_INSIGHTS,
-  PORTFOLIO,
-} from "@/data/mock";
-import { pct } from "@/lib/format";
+import { cardDate, pct } from "@/lib/format";
 import { useDismissed } from "@/lib/useDismissed";
 import { useMinDuration } from "@/lib/useMinDuration";
 import { usePaise } from "@/lib/store";
 
 export default function Invest() {
-  const { userData, settings, status, togglePrivacyMode, money, openAsk } =
-    usePaise();
+  const {
+    userData,
+    portfolio: bundle,
+    screenInsights,
+    settings,
+    status,
+    togglePrivacyMode,
+    money,
+    openAsk,
+  } = usePaise();
   const dismissed = useDismissed();
   const hidden = settings.privacyMode;
   const idleCash = userData?.monthEndForecast?.remaining;
   const ready = useMinDuration(status !== "loading");
+
+  // Portfolio, holdings, SIPs and goals come from /api/portfolio now. Until
+  // the fetch lands the lists are empty, which is what the skeletons above
+  // them are for.
+  const portfolio = bundle?.portfolio;
+  const holdings = bundle?.holdings ?? [];
+  const sips = bundle?.sips ?? [];
+  const goals = bundle?.goals ?? [];
 
   return (
     <AppShell tabBar>
@@ -36,7 +45,9 @@ export default function Invest() {
           <section className="col-main">
             <div className="eyebrow">portfolio value</div>
             <div className="hero-amount">
-              <div className="hero-amount__value">{money(PORTFOLIO.value)}</div>
+              <div className="hero-amount__value">
+                {portfolio ? money(portfolio.value) : "— — —"}
+              </div>
               <button
                 type="button"
                 className="hero-amount__toggle"
@@ -45,13 +56,15 @@ export default function Invest() {
                 {hidden ? "SHOW" : "HIDE"}
               </button>
             </div>
-            <div className="delta-row">
-              <span className="delta-chip">{pct(PORTFOLIO.returnPct)}</span>
-              <span className="delta-note">
-                {money(PORTFOLIO.gained)} gained on {money(PORTFOLIO.invested)}{" "}
-                invested
-              </span>
-            </div>
+            {portfolio && (
+              <div className="delta-row">
+                <span className="delta-chip">{pct(portfolio.returnPct)}</span>
+                <span className="delta-note">
+                  {money(portfolio.gained)} gained on {money(portfolio.invested)}{" "}
+                  invested
+                </span>
+              </div>
+            )}
           </section>
 
           <div className="col-side">
@@ -62,14 +75,14 @@ export default function Invest() {
                 tight
                 left={{
                   label: "invested / mo",
-                  value: money(PORTFOLIO.sipMonthly),
-                  note: `next debit ${PORTFOLIO.nextDebit}`,
+                  value: portfolio ? money(portfolio.sipMonthly) : "— — —",
+                  note: portfolio ? `next debit ${portfolio.nextDebit}` : undefined,
                   noteTone: "up",
                 }}
                 right={{
                   label: "idle cash",
                   value: idleCash === undefined ? "— — —" : money(idleCash),
-                  note: `earning ${PORTFOLIO.idleCashRate}`,
+                  note: portfolio ? `earning ${portfolio.idleCashRate}` : undefined,
                 }}
               />
             </SkeletonSwap>
@@ -83,14 +96,14 @@ export default function Invest() {
                 holdings
               </div>
               <ShareBar
-                segments={HOLDINGS.map((h) => ({
+                segments={holdings.map((h) => ({
                   key: h.name,
                   share: h.share,
                   color: h.color,
                 }))}
               />
               <div style={{ marginTop: 14 }}>
-                {HOLDINGS.map((holding) => (
+                {holdings.map((holding) => (
                   <div className="list-row list-row--tall" key={holding.name}>
                     <span
                       className="swatch"
@@ -125,7 +138,7 @@ export default function Invest() {
               <div className="eyebrow" style={{ marginBottom: 12 }}>
                 active sips
               </div>
-              {ACTIVE_SIPS.map((sip) => (
+              {sips.map((sip) => (
                 <div className="list-row list-row--tall" key={sip.name}>
                   <span className="swatch" style={{ background: sip.color }} />
                   <div className="list-row__body">
@@ -143,7 +156,7 @@ export default function Invest() {
               goals
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-              {GOALS.map((goal) => (
+              {goals.map((goal) => (
                 <div key={goal.name}>
                   <div className="goal__head">
                     <span className="goal__name">{goal.name}</span>
@@ -194,10 +207,10 @@ export default function Invest() {
         </div>
 
         <div className="insight-row">
-          {dismissed.keep(INVEST_INSIGHTS).map((insight) => (
+          {dismissed.keep(screenInsights.invest).map((insight) => (
             <InsightCard
               key={insight.id}
-              date={insight.date}
+              date={cardDate(insight.date)}
               headline={insight.headline}
               body={insight.body}
               actions={insight.actions.map((label, i) => ({
