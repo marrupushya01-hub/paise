@@ -1,20 +1,25 @@
-// Paise backend prototype
-// A small Express API that serves the mock data referenced by the
-// wireframes (net worth, cash flow, category insights, "Ask Paise").
+// Paise backend
 //
-// Security posture for a fintech-flavored demo:
+// Express API behind the Paise client: net worth, cash flow, category
+// insights, portfolio, and "Ask Paise" against a locally hosted model.
+//
+// Security posture:
+//   - phone + one-time-code sign-in; opaque 256-bit session tokens, stored
+//     only as HMACs (auth.js)
+//   - SQLite-backed per-account data; every read is scoped by session user id
+//     and there is no route that can return another account's rows (db.js)
+//   - server-enforced privacy mode: masked figures are never serialised, so
+//     devtools cannot see through the mask
 //   - helmet() for standard security headers
 //   - strict CORS allowlist (env-configured, no wildcard by default)
-//   - JSON body size limit
-//   - rate limiting (general + a stricter one for the AI endpoint)
-//   - optional x-api-key gate for the data/AI routes (PAISE_API_KEY)
+//   - 10kb JSON body limit
+//   - four rate limiters: general, auth, OTP issuance, and the AI endpoint
 //   - no-store caching on anything that returns financial data
 //   - generic error responses (details only ever go to the server log)
 //
-// This is still a prototype: there's no real auth/session/user model,
-// no database, and the "AI" endpoint is a stub unless you supply your
-// own ANTHROPIC_API_KEY. See README.md before using this for
-// anything beyond a local demo.
+// Still a prototype: there is no SMS gateway (see auth.js on OTP delivery),
+// no TLS termination of its own, and the dataset every new account starts
+// from is the seeded fixture in seed.js. See README.md.
 
 // Load .env before any process.env reads.
 import "dotenv/config";
@@ -22,23 +27,94 @@ import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import helmet from "helmet";
-import rateLimit from "express-rate-limit";
+import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import morgan from "morgan";
+import os from "node:os";
+
+import {
+  AUTH_CONFIG,
+  createSession,
+  normalisePhone,
+  requestOtp,
+  resolveSession,
+  revokeAllSessions,
+  revokeSession,
+  sweepExpired,
+  verifyOtp,
+} from "./auth.js";
+import {
+  dismissInsight,
+  getDismissed,
+  getModelSnapshot,
+  getPortfolio,
+  getProfile,
+  getScreenInsights,
+  getSettings,
+  getSpendingTrend,
+  getSubscriptions,
+  getTrendSlugs,
+  getUserData,
+  restoreInsight,
+  saveSettings,
+  seededNow,
+  stats,
+} from "./db.js";
 
 const PORT = Number(process.env.PORT) || 4000;
-const API_KEY = process.env.PAISE_API_KEY || null;
 const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || "http://localhost:3000")
   .split(",")
   .map((s) => s.trim())
   .filter(Boolean);
-// Model used for /api/ask — override via ANTHROPIC_MODEL in .env.
-// See .env.example for a link to valid model IDs.
-const ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL || "claude-sonnet-4-5";
+// A hotspot hands out a different address every session, so pinning the
+// phone's origin in ALLOWED_ORIGINS means editing .env before every demo.
+// With ALLOW_LAN_ORIGINS=true, any private-range IPv4 origin is accepted on
+// top of the allowlist. Only for a LAN demo — turn it off the moment this
+// server is reachable from the internet, a tunnel included.
+const ALLOW_LAN_ORIGINS = process.env.ALLOW_LAN_ORIGINS === "true";
+// /api/ask runs against a locally hosted Ollama model — no API key, no
+// per-token cost, and it keeps the financial snapshot on this machine.
+const OLLAMA_URL = process.env.OLLAMA_URL || "http://127.0.0.1:11434/api/generate";
+const OLLAMA_MODEL = process.env.OLLAMA_MODEL || "qwen3:8b";
+// Prompts larger than the context window do not truncate — they wedge the
+// Ollama runner at 100% CPU and every later request queues behind it. The
+// snapshot below is ~1KB, so 8192 is generous, but keep them in step if the
+// context ever grows.
+const OLLAMA_NUM_CTX = Number(process.env.OLLAMA_NUM_CTX) || 8192;
+// An 8B model on CPU answers in tens of seconds, not the ~2s a hosted API
+// takes. Anything under a minute here just turns slow answers into 502s.
+const OLLAMA_TIMEOUT_MS = Number(process.env.OLLAMA_TIMEOUT_MS) || 120000;
 
-if (!API_KEY) {
-  console.warn(
-    "[paise] PAISE_API_KEY is not set — /api routes are running in OPEN demo mode. " +
-      "Set PAISE_API_KEY in your environment (see .env.example) before sharing this server."
+const SYSTEM_PROMPT =
+  "You are Paise, a concise personal-finance assistant. Answer using only the " +
+  "financial context provided by the app. Keep answers short and direct. " +
+  "Never invent numbers that weren't given to you. Every amount is in Indian " +
+  "rupees — write them with a rupee sign, never a dollar sign.";
+
+// The three private IPv4 ranges (RFC 1918). Deliberately no 169.254.0.0/16
+// and no IPv6 — a phone on a hotspot always lands in one of these.
+const PRIVATE_IPV4 =
+  /^(10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})$/;
+
+function isLanOrigin(origin) {
+  if (!ALLOW_LAN_ORIGINS) return false;
+  let url;
+  try {
+    url = new URL(origin);
+  } catch {
+    return false;
+  }
+  return url.protocol === "http:" && PRIVATE_IPV4.test(url.hostname);
+}
+
+// Every non-loopback IPv4 this machine answers on, so the startup banner can
+// print the exact URL to type into a phone. The interface name comes along
+// because a VPN (WARP, Tailscale) also shows up here with an address no
+// phone on your hotspot can route to — you want the wifi adapter's line.
+function lanAddresses() {
+  return Object.entries(os.networkInterfaces()).flatMap(([name, ifaces]) =>
+    (ifaces || [])
+      .filter((iface) => iface.family === "IPv4" && !iface.internal)
+      .map((iface) => ({ name, address: iface.address }))
   );
 }
 
@@ -73,13 +149,13 @@ app.use(
     origin(origin, callback) {
       // Allow tools like curl/Postman (no Origin header) and any
       // explicitly allowlisted browser origin.
-      if (!origin || ALLOWED_ORIGINS.includes(origin)) {
+      if (!origin || ALLOWED_ORIGINS.includes(origin) || isLanOrigin(origin)) {
         return callback(null, true);
       }
       return callback(new Error("Not allowed by CORS"));
     },
-    methods: ["GET", "POST"],
-    allowedHeaders: ["Content-Type", "x-api-key"],
+    methods: ["GET", "POST", "PATCH", "DELETE"],
+    allowedHeaders: ["Content-Type", "Authorization"],
     maxAge: 600,
   })
 );
@@ -91,18 +167,51 @@ app.use(express.json({ limit: "10kb" }));
 
 // ---------------------------------------------------------------------------
 // Rate limiting
+//
+// Signed-in traffic is counted per session rather than per IP: every phone on
+// one hotspot shares a NAT address, so an IP-only budget would have the first
+// device to load the app exhaust it for the room.
 // ---------------------------------------------------------------------------
+function rateKey(req) {
+  const token = bearer(req);
+  // ipKeyGenerator normalises IPv6 to a /64 so one address cannot mint a
+  // fresh budget per interface identifier.
+  return token ? `s:${token.slice(0, 24)}` : `ip:${ipKeyGenerator(req.ip)}`;
+}
+
 const generalLimiter = rateLimit({
   windowMs: 60 * 1000,
-  limit: 60,
+  limit: 120,
+  keyGenerator: rateKey,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: "Too many requests. Please slow down." },
 });
 
+// Codes cost nothing to request and everything to brute-force, so issuance is
+// the tightest budget in the server.
+const otpRequestLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many codes requested. Try again in a few minutes." },
+});
+
+// Per-challenge attempts are already capped in auth.js; this caps how fast a
+// single address can burn through fresh challenges.
+const otpVerifyLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many verification attempts. Try again in a few minutes." },
+});
+
 const askLimiter = rateLimit({
   windowMs: 60 * 1000,
   limit: 10,
+  keyGenerator: rateKey,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: "Too many requests to Ask Paise. Please wait a moment." },
@@ -115,121 +224,107 @@ app.use("/api", generalLimiter);
 // ---------------------------------------------------------------------------
 app.use("/api", (req, res, next) => {
   res.set("Cache-Control", "no-store");
+  res.set("Vary", "Origin, Authorization");
   next();
 });
 
 // ---------------------------------------------------------------------------
-// Optional API key gate
+// Session gate
 // ---------------------------------------------------------------------------
-function requireApiKey(req, res, next) {
-  if (!API_KEY) return next(); // open demo mode
-  const provided = req.get("x-api-key");
-  if (provided && provided === API_KEY) return next();
-  return res.status(401).json({ error: "Missing or invalid x-api-key." });
+function bearer(req) {
+  const header = req.get("authorization") || "";
+  const [scheme, value] = header.split(" ");
+  if (!value || scheme.toLowerCase() !== "bearer") return null;
+  return value.trim();
+}
+
+function requireSession(req, res, next) {
+  const token = bearer(req);
+  const session = token ? resolveSession(token) : null;
+  if (!session) {
+    return res.status(401).json({ error: "Sign in to continue.", code: "no_session" });
+  }
+  req.session = session;
+  req.userId = session.userId;
+  next();
 }
 
 // ---------------------------------------------------------------------------
-// Mock data (mirrors the numbers used in the wireframes)
+// Auth routes
 // ---------------------------------------------------------------------------
-const MOCK_USER_DATA = {
-  netWorth: 842600,
-  netWorthChangeThisMonth: 18400,
-  safeToSpend: 6300,
-  safeToSpendUntil: "2026-08-31",
-  spentThisMonth: 38420,
-  monthlyBudget: 42000,
-  spentVsLastMonth: 4200,
 
-  // Net-worth milestone projection shown on the Money tab's progress bar
-  // ("today · 23", "₹10L · 24", "₹50L · 31", "₹1Cr · 38"). `progressPct`
-  // is the fill toward the *next* unreached milestone. In a real system
-  // this comes from a projection model (income, savings rate, growth
-  // assumptions) — this is static mock data standing in for that.
-  netWorthMilestones: {
-    currentAge: 23,
-    progressPct: 34,
-    milestones: [
-      { label: "₹10L", amount: 1000000, projectedAge: 24 },
-      { label: "₹50L", amount: 5000000, projectedAge: 31 },
-      { label: "₹1Cr", amount: 10000000, projectedAge: 38 },
-    ],
-  },
+app.post("/api/auth/request-otp", otpRequestLimiter, (req, res) => {
+  const phone = normalisePhone(req.body?.phone);
+  if (!phone) {
+    return res.status(400).json({ error: "Enter a valid 10-digit Indian mobile number." });
+  }
 
-  // Distinct from `safeToSpend` — this is the Money tab's "at this burn
-  // rate" end-of-month forecast card, not the day-to-day home-screen number.
-  monthEndForecast: {
-    remaining: 8400,
-    until: "2026-08-31",
-    basis: "burn_rate",
-  },
+  const { challengeId, code, expiresAt, ttlMs } = requestOtp(phone);
+  console.log(
+    `[paise] OTP for +91${phone}: ${code}  (challenge ${challengeId}, valid ${Math.round(
+      ttlMs / 1000
+    )}s)`
+  );
 
-  categories: [
-    { slug: "food-delivery", name: "Food & delivery", amount: 11900, payments: 64, pct: 31 },
-    { slug: "rent", name: "Rent", amount: 9000, payments: 1, pct: 24 },
-    { slug: "travel-cabs", name: "Travel & cabs", amount: 6780, payments: 22, pct: 18 },
-    { slug: "subscriptions", name: "Subscriptions", amount: 5340, payments: 7, pct: 14 },
-    { slug: "shopping", name: "Shopping", amount: 5400, payments: 9, pct: 13 },
-  ],
+  const body = { challengeId, expiresAt, expiresInMs: ttlMs, delivery: AUTH_CONFIG.delivery };
+  // Demo delivery. There is no SMS gateway, so with OTP_DELIVERY=response the
+  // code comes back in the body — the only way an unattended phone on a
+  // hotspot can sign itself in. Never leave this on off your own machine.
+  if (AUTH_CONFIG.delivery === "response") body.devCode = code;
+  res.json(body);
+});
 
-  recentTransactions: [
-    { merchant: "Zomato", amount: -486, date: "2026-08-26T21:12:00+05:30", method: "UPI" },
-    { merchant: "Aditya", amount: 1200, date: "2026-08-26T14:40:00+05:30", method: "split dinner" },
-    { merchant: "Blinkit", amount: -1142, date: "2026-08-25T20:24:00+05:30", method: "UPI" },
-    { merchant: "Cult.fit", amount: -1299, date: "2026-08-24T00:00:00+05:30", method: "autopay" },
-    { merchant: "Uber", amount: -212, date: "2026-08-24T00:00:00+05:30", method: "HDFC card" },
-    { merchant: "Spotify Duo", amount: -149, date: "2026-08-23T00:00:00+05:30", method: "autopay" },
-  ],
+app.post("/api/auth/verify-otp", otpVerifyLimiter, (req, res) => {
+  const { challengeId, code } = req.body || {};
+  const result = verifyOtp(challengeId, code);
 
-  connectedAccounts: [
-    { name: "Bank & UPI", provider: "HDFC", status: "connected", syncedAgo: "2m" },
-    { name: "Mutual funds", provider: "Zerodha Coin", status: "connected", syncedAgo: "1h" },
-    { name: "Credit cards", provider: null, status: "not_connected" },
-    { name: "Fixed deposits", provider: null, status: "not_connected" },
-    { name: "Insurance", provider: null, status: "not_connected" },
-    { name: "NPS", provider: null, status: "not_connected" },
-  ],
-};
+  if (!result.ok) {
+    // Every failure reads the same from outside apart from the two states the
+    // user has to be able to act on: an expired code and a locked challenge.
+    if (result.reason === "expired") {
+      return res.status(410).json({ error: "That code has expired. Request a new one.", code: "expired" });
+    }
+    if (result.reason === "locked") {
+      return res.status(429).json({ error: "Too many wrong codes. Request a new one.", code: "locked" });
+    }
+    return res.status(401).json({
+      error: "That code isn't right.",
+      code: "invalid",
+      attemptsLeft: result.attemptsLeft,
+    });
+  }
 
-// "3 subscriptions you forgot" card, shown on the Money tab. Structurally
-// distinct from the tone-based insight cards below — this is a detected
-// list of recurring charges, not generated commentary.
-const MOCK_SUBSCRIPTIONS = [
-  { name: "Cult.fit", amount: 1299, cadence: "monthly", forgotten: true },
-  { name: "Spotify Duo", amount: 149, cadence: "monthly", forgotten: true },
-  { name: "Prime", amount: 399, cadence: "monthly", forgotten: true },
-  { name: "HDFC Bank Locker", amount: 250, cadence: "quarterly", forgotten: false },
-];
+  const { token, expiresAt } = createSession(result.user.id, req.get("user-agent"));
+  res.json({
+    token,
+    expiresAt,
+    isNewAccount: result.created,
+    profile: getProfile(result.user.id),
+  });
+});
 
-// Backs the small trend chart in the "Ask Paise" sheet (Jun/Jul/Aug bars).
-// Keyed by the same `slug` used in `categories` above.
-const MOCK_SPENDING_TRENDS = {
-  "food-delivery": [
-    { month: "2026-06", amount: 6200 },
-    { month: "2026-07", amount: 7700 },
-    { month: "2026-08", amount: 11900 },
-  ],
-  rent: [
-    { month: "2026-06", amount: 9000 },
-    { month: "2026-07", amount: 9000 },
-    { month: "2026-08", amount: 9000 },
-  ],
-  "travel-cabs": [
-    { month: "2026-06", amount: 5400 },
-    { month: "2026-07", amount: 6100 },
-    { month: "2026-08", amount: 6780 },
-  ],
-  subscriptions: [
-    { month: "2026-06", amount: 5340 },
-    { month: "2026-07", amount: 5340 },
-    { month: "2026-08", amount: 5340 },
-  ],
-  shopping: [
-    { month: "2026-06", amount: 3200 },
-    { month: "2026-07", amount: 4100 },
-    { month: "2026-08", amount: 5400 },
-  ],
-};
+app.get("/api/auth/me", requireSession, (req, res) => {
+  res.json({
+    profile: getProfile(req.userId),
+    settings: getSettings(req.userId),
+    expiresAt: req.session.expiresAt,
+  });
+});
 
+app.post("/api/auth/logout", requireSession, (req, res) => {
+  revokeSession(bearer(req));
+  res.json({ ok: true });
+});
+
+// "Sign out everywhere" — the one thing a shared secret could never offer.
+app.post("/api/auth/logout-all", requireSession, (req, res) => {
+  const revoked = revokeAllSessions(req.userId);
+  res.json({ ok: true, revoked });
+});
+
+// ---------------------------------------------------------------------------
+// Insight copy — tone-conditioned, generated rather than stored
+// ---------------------------------------------------------------------------
 function buildInsights(tone) {
   const direct = tone !== "Warm";
   return [
@@ -264,166 +359,304 @@ function buildInsights(tone) {
 }
 
 // ---------------------------------------------------------------------------
-// Routes
+// Privacy mode, enforced here rather than at render
+//
+// "Hide balances" used to be a CSS-level truth: the full figures were sent and
+// the client drew dots over them, so devtools saw straight through it. Now the
+// masked fields are dropped before the response is serialised — the number is
+// not in the payload at all.
 // ---------------------------------------------------------------------------
-app.get("/health", (req, res) => {
-  res.json({ status: "ok", uptimeSeconds: Math.round(process.uptime()) });
-});
-
-app.get("/api/user-data", requireApiKey, (req, res) => {
-  const privacyMode = req.query.privacy === "true";
-  if (!privacyMode) return res.json(MOCK_USER_DATA);
-
-  // Privacy mode: mask all fields that reveal specific financial figures or
-  // identify merchants/amounts in transactions and categories.
-  const masked = {
-    ...MOCK_USER_DATA,
+function maskUserData(data) {
+  return {
+    ...data,
     netWorth: null,
     netWorthChangeThisMonth: null,
     safeToSpend: null,
     spentThisMonth: null,
     spentVsLastMonth: null,
-    monthEndForecast: null,
-    // Replace each transaction with amount/merchant hidden
-    recentTransactions: MOCK_USER_DATA.recentTransactions.map((t) => ({
+    monthlyBudget: null,
+    moneyIn: data.moneyIn ? { ...data.moneyIn, amount: null } : null,
+    monthEndForecast: data.monthEndForecast
+      ? { ...data.monthEndForecast, remaining: null }
+      : null,
+    // Merchants identify spending as surely as the amounts do.
+    recentTransactions: data.recentTransactions.map((t) => ({
       ...t,
-      merchant: "***",
+      merchant: "•••",
       amount: null,
+      detail: t.detail
+        ? { ...t.detail, initial: "•", account: "•••", note: null, meta: t.detail.meta }
+        : null,
     })),
-    // Replace category amounts so the breakdown can't reveal spending
-    categories: MOCK_USER_DATA.categories.map((c) => ({
-      ...c,
-      amount: null,
-      pct: null,
-    })),
+    categories: data.categories.map((c) => ({ ...c, amount: null, pct: null })),
   };
-  res.json(masked);
+}
+
+function maskPortfolio(bundle) {
+  return {
+    portfolio: {
+      ...bundle.portfolio,
+      value: null,
+      gained: null,
+      invested: null,
+      sipMonthly: null,
+    },
+    holdings: bundle.holdings.map((h) => ({ ...h, value: null })),
+    sips: bundle.sips,
+    goals: bundle.goals.map((g) => ({ ...g, value: null })),
+  };
+}
+
+// `?privacy=` lets a caller ask for masking explicitly; with it absent the
+// account's stored setting decides. The setting is the durable one — flipping
+// "Hide balances" on a laptop hides them on the phone too.
+function privacyRequested(req) {
+  if (req.query.privacy === "true") return true;
+  if (req.query.privacy === "false") return false;
+  return getSettings(req.userId).privacyMode;
+}
+
+// ---------------------------------------------------------------------------
+// Data routes
+// ---------------------------------------------------------------------------
+
+app.get("/health", (req, res) => {
+  const s = stats();
+  res.json({
+    status: "ok",
+    uptimeSeconds: Math.round(process.uptime()),
+    accounts: s.users,
+    activeSessions: s.sessions,
+    otpDelivery: AUTH_CONFIG.delivery,
+    authSecret: AUTH_CONFIG.secretSource,
+  });
 });
 
-app.get("/api/insights", requireApiKey, (req, res) => {
-  const tone = req.query.tone === "Warm" ? "Warm" : "Direct";
-  res.json({ tone, insights: buildInsights(tone) });
+app.get("/api/user-data", requireSession, (req, res) => {
+  const data = getUserData(req.userId);
+  if (!data) return res.status(404).json({ error: "No data for this account." });
+  res.json(privacyRequested(req) ? maskUserData(data) : data);
 });
 
-app.get("/api/subscriptions", requireApiKey, (req, res) => {
+app.get("/api/insights", requireSession, (req, res) => {
+  const stored = getSettings(req.userId).tone;
+  const tone = req.query.tone === "Warm" ? "Warm" : req.query.tone === "Direct" ? "Direct" : stored;
+  const dismissed = new Set(getDismissed(req.userId));
+  res.json({
+    tone,
+    insights: buildInsights(tone).filter((c) => !dismissed.has(c.id)),
+  });
+});
+
+// The Money and Invest tabs' own cards. These used to be hardcoded in
+// frontend/data/mock.js, which meant "Not now" could not outlive a refresh.
+app.get("/api/screen-insights", requireSession, (req, res) => {
+  const screen = req.query.screen === "invest" ? "invest" : "money";
+  const dismissed = new Set(getDismissed(req.userId));
+  res.json({
+    screen,
+    insights: getScreenInsights(req.userId, screen).filter((c) => !dismissed.has(c.id)),
+  });
+});
+
+app.get("/api/subscriptions", requireSession, (req, res) => {
   const onlyForgotten = req.query.forgotten === "true";
-  const subscriptions = onlyForgotten
-    ? MOCK_SUBSCRIPTIONS.filter((s) => s.forgotten)
-    : MOCK_SUBSCRIPTIONS;
-  res.json({ subscriptions });
+  res.json({ subscriptions: getSubscriptions(req.userId, { onlyForgotten }) });
 });
 
-const KNOWN_CATEGORY_SLUGS = Object.keys(MOCK_SPENDING_TRENDS);
-
-app.get("/api/spending-trend", requireApiKey, (req, res) => {
+app.get("/api/spending-trend", requireSession, (req, res) => {
+  const known = getTrendSlugs(req.userId);
   const category = req.query.category;
-  if (!category || !KNOWN_CATEGORY_SLUGS.includes(category)) {
-    return res.status(400).json({
-      error: `\`category\` must be one of: ${KNOWN_CATEGORY_SLUGS.join(", ")}`,
-    });
+  if (!category || !known.includes(category)) {
+    return res.status(400).json({ error: `\`category\` must be one of: ${known.join(", ")}` });
   }
-
   const monthsParam = Number(req.query.months) || 3;
   const months = Math.min(Math.max(monthsParam, 1), 12);
-  const fullTrend = MOCK_SPENDING_TRENDS[category];
-  const trend = fullTrend.slice(Math.max(fullTrend.length - months, 0));
-
-  res.json({ category, trend });
+  res.json({ category, trend: getSpendingTrend(req.userId, category, months) });
 });
 
-app.post("/api/ask", requireApiKey, askLimiter, async (req, res, next) => {
+app.get("/api/portfolio", requireSession, (req, res) => {
+  const bundle = getPortfolio(req.userId);
+  if (!bundle) return res.status(404).json({ error: "No portfolio for this account." });
+  res.json(privacyRequested(req) ? maskPortfolio(bundle) : bundle);
+});
+
+app.get("/api/profile", requireSession, (req, res) => {
+  res.json({ profile: getProfile(req.userId) });
+});
+
+app.get("/api/settings", requireSession, (req, res) => {
+  res.json({ settings: getSettings(req.userId) });
+});
+
+app.patch("/api/settings", requireSession, (req, res) => {
+  const { privacyMode, tone } = req.body || {};
+  if (privacyMode !== undefined && typeof privacyMode !== "boolean") {
+    return res.status(400).json({ error: "`privacyMode` must be a boolean." });
+  }
+  if (tone !== undefined && tone !== "Direct" && tone !== "Warm") {
+    return res.status(400).json({ error: "`tone` must be \"Direct\" or \"Warm\"." });
+  }
+  res.json({ settings: saveSettings(req.userId, { privacyMode, tone }) });
+});
+
+app.get("/api/dismissed", requireSession, (req, res) => {
+  res.json({ dismissed: getDismissed(req.userId) });
+});
+
+app.post("/api/dismissed", requireSession, (req, res) => {
+  const { insightId } = req.body || {};
+  if (typeof insightId !== "string" || !insightId.trim() || insightId.length > 64) {
+    return res.status(400).json({ error: "`insightId` is required." });
+  }
+  dismissInsight(req.userId, insightId.trim());
+  res.json({ dismissed: getDismissed(req.userId) });
+});
+
+app.delete("/api/dismissed/:insightId", requireSession, (req, res) => {
+  restoreInsight(req.userId, req.params.insightId);
+  res.json({ dismissed: getDismissed(req.userId) });
+});
+
+// ---------------------------------------------------------------------------
+// Ask Paise
+//
+// The single egress point in the system, and it egresses to loopback. The
+// snapshot is assembled from this account's rows — never from the request —
+// and the question is length-capped before it is embedded in the prompt.
+// ---------------------------------------------------------------------------
+
+function ollamaBody(snapshot, question, stream) {
+  return JSON.stringify({
+    model: OLLAMA_MODEL,
+    system: SYSTEM_PROMPT,
+    prompt: `User's financial snapshot:\n${JSON.stringify(snapshot)}\n\nQuestion: ${question}`,
+    stream,
+    // qwen3 and other hybrid-reasoning models spend their entire budget in
+    // `thinking` and return an empty `response` unless this is off.
+    think: false,
+    options: { temperature: 0.1, num_ctx: OLLAMA_NUM_CTX },
+  });
+}
+
+function readQuestion(req, res) {
+  const { question } = req.body || {};
+  if (typeof question !== "string" || !question.trim()) {
+    res.status(400).json({ error: "`question` is required and must be a non-empty string." });
+    return null;
+  }
+  if (question.length > 500) {
+    res.status(400).json({ error: "`question` must be 500 characters or fewer." });
+    return null;
+  }
+  return question.trim();
+}
+
+app.post("/api/ask", requireSession, askLimiter, async (req, res, next) => {
+  const question = readQuestion(req, res);
+  if (question === null) return undefined;
+
+  const snapshot = getModelSnapshot(req.userId);
+  if (!snapshot) return res.status(404).json({ error: "No data for this account." });
+
+  const wantsStream = (req.get("accept") || "").includes("text/event-stream");
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), OLLAMA_TIMEOUT_MS);
+  // A closed tab should stop the generation, not leave the runner busy.
+  req.on("close", () => controller.abort());
+
   try {
-    const { question } = req.body || {};
-
-    if (typeof question !== "string" || !question.trim()) {
-      return res.status(400).json({ error: "`question` is required and must be a non-empty string." });
-    }
-    if (question.length > 500) {
-      return res.status(400).json({ error: "`question` must be 500 characters or fewer." });
-    }
-
-    const anthropicKey = process.env.ANTHROPIC_API_KEY;
-    if (!anthropicKey) {
-      // No key configured — return a canned, clearly-labelled stub so the
-      // frontend still has something to render in a local demo.
-      return res.json({
-        answer:
-          "This is a stub response — set ANTHROPIC_API_KEY in your environment " +
-          "to have Ask Paise answer using your real financial data.",
-        stub: true,
-      });
-    }
-
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 15000);
-
-    let apiRes;
+    let upstream;
     try {
-      apiRes = await fetch("https://api.anthropic.com/v1/messages", {
+      upstream = await fetch(OLLAMA_URL, {
         method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-api-key": anthropicKey,
-          "anthropic-version": "2023-06-01",
-        },
-        body: JSON.stringify({
-          model: ANTHROPIC_MODEL,
-          max_tokens: 400,
-          system:
-            "You are Paise, a concise personal-finance assistant. Answer using only the " +
-            "financial context provided by the app. Keep answers short and direct. " +
-            "Never invent numbers that weren't given to you.",
-          messages: [
-            {
-              role: "user",
-              // Send a lean context object — only the fields needed to answer
-              // finance questions — rather than the full internal data structure.
-              content:
-                `User's financial snapshot:\n${JSON.stringify({
-                  netWorth: MOCK_USER_DATA.netWorth,
-                  safeToSpend: MOCK_USER_DATA.safeToSpend,
-                  safeToSpendUntil: MOCK_USER_DATA.safeToSpendUntil,
-                  spentThisMonth: MOCK_USER_DATA.spentThisMonth,
-                  monthlyBudget: MOCK_USER_DATA.monthlyBudget,
-                  spentVsLastMonth: MOCK_USER_DATA.spentVsLastMonth,
-                  monthEndForecast: MOCK_USER_DATA.monthEndForecast,
-                  topCategories: MOCK_USER_DATA.categories.map((c) => ({
-                    name: c.name,
-                    amount: c.amount,
-                    pct: c.pct,
-                  })),
-                  subscriptions: MOCK_SUBSCRIPTIONS.map((s) => ({
-                    name: s.name,
-                    amount: s.amount,
-                    cadence: s.cadence,
-                  })),
-                })}\n\nQuestion: ${question}`,
-            },
-          ],
-        }),
+        headers: { "content-type": "application/json" },
+        body: ollamaBody(snapshot, question, wantsStream),
         signal: controller.signal,
       });
-    } finally {
-      clearTimeout(timeout);
-    }
-
-    if (!apiRes.ok) {
-      // Log details server-side only; never forward upstream error bodies
-      // (which can contain request echoes) straight to the client.
-      console.error("[paise] Anthropic API error", apiRes.status, await apiRes.text());
+    } catch (err) {
+      // Ollama not running is the single likeliest cause, and it is worth
+      // saying out loud in the server log rather than as a generic 500.
+      if (err.name === "AbortError") {
+        console.error(`[paise] Ollama timed out after ${OLLAMA_TIMEOUT_MS}ms`);
+        return res.status(504).json({ error: "The assistant took too long to answer." });
+      }
+      console.error(`[paise] cannot reach Ollama at ${OLLAMA_URL} —`, err.message);
       return res.status(502).json({ error: "The assistant is temporarily unavailable." });
     }
 
-    const data = await apiRes.json();
-    const answer = (data.content || [])
-      .filter((block) => block.type === "text")
-      .map((block) => block.text)
-      .join("\n")
-      .trim();
+    if (!upstream.ok) {
+      // Log details server-side only; never forward upstream error bodies
+      // (which can contain request echoes) straight to the client.
+      console.error("[paise] Ollama error", upstream.status, await upstream.text());
+      return res.status(502).json({ error: "The assistant is temporarily unavailable." });
+    }
 
-    res.json({ answer: answer || "I couldn't come up with an answer to that.", stub: false });
+    if (!wantsStream) {
+      const data = await upstream.json();
+      const answer = (data.response || "").trim();
+      return res.json({
+        answer: answer || "I couldn't come up with an answer to that.",
+        stub: false,
+      });
+    }
+
+    // ---- Server-sent events -------------------------------------------------
+    // An 8B model on CPU takes tens of seconds to finish a paragraph but only
+    // a second or two to start one. Forwarding Ollama's NDJSON as SSE is the
+    // difference between a spinner and an answer arriving as it is written.
+    res.status(200).set({
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "no-store",
+      Connection: "keep-alive",
+      // nginx and friends buffer event streams into uselessness otherwise.
+      "X-Accel-Buffering": "no",
+    });
+    res.flushHeaders?.();
+
+    const send = (event, payload) => {
+      res.write(`event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`);
+    };
+
+    const reader = upstream.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let full = "";
+
+    // Ollama emits one JSON object per line. A chunk boundary can land inside
+    // a line, so the tail is carried over rather than parsed.
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        let chunk;
+        try {
+          chunk = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        if (chunk.response) {
+          full += chunk.response;
+          send("token", { text: chunk.response });
+        }
+        if (chunk.done) send("done", { answer: full.trim() });
+      }
+    }
+
+    if (!full.trim()) send("done", { answer: "I couldn't come up with an answer to that." });
+    return res.end();
   } catch (err) {
-    next(err);
+    if (err.name === "AbortError") {
+      if (res.headersSent) return res.end();
+      return res.status(504).json({ error: "The assistant took too long to answer." });
+    }
+    return next(err);
+  } finally {
+    clearTimeout(timeout);
   }
 });
 
@@ -439,11 +672,49 @@ app.use((err, req, res, next) => {
   if (err && err.message === "Not allowed by CORS") {
     return res.status(403).json({ error: "Origin not allowed." });
   }
+  if (err && err.type === "entity.too.large") {
+    return res.status(413).json({ error: "Request body too large." });
+  }
   console.error("[paise] unhandled error:", err);
+  if (res.headersSent) return res.end();
   res.status(500).json({ error: "Something went wrong. Please try again." });
 });
 
-app.listen(PORT, () => {
+// Expired sessions and spent codes are swept every ten minutes rather than
+// left to accumulate for a number that never signs in again.
+const sweep = setInterval(() => {
+  const { sessions, challenges } = sweepExpired();
+  if (sessions || challenges) {
+    console.log(`[paise] swept ${sessions} expired session(s), ${challenges} spent code(s)`);
+  }
+}, 10 * 60 * 1000);
+sweep.unref();
+
+// Explicitly bind every interface. Express already defaults to this, but the
+// phone on the hotspot reaching this server depends on it, so it is spelled
+// out rather than left to a default someone might tighten later.
+app.listen(PORT, "0.0.0.0", () => {
+  const s = stats();
   console.log(`[paise] backend listening on http://localhost:${PORT}`);
+  for (const { name, address } of lanAddresses()) {
+    console.log(`[paise]                     http://${address}:${PORT}  (${name})`);
+  }
+  console.log(`[paise] database: ${s.path}${seededNow ? " (seeded)" : ""} · ${s.users} account(s)`);
   console.log(`[paise] allowed origins: ${ALLOWED_ORIGINS.join(", ")}`);
+  if (ALLOW_LAN_ORIGINS) {
+    console.log("[paise] plus any private-range LAN origin (ALLOW_LAN_ORIGINS=true)");
+  }
+  if (AUTH_CONFIG.delivery === "response") {
+    console.warn(
+      "[paise] OTP_DELIVERY=response — sign-in codes are returned in the API response. " +
+        "Demo only. Set OTP_DELIVERY=log anywhere this server is reachable off this machine."
+    );
+  } else {
+    console.log("[paise] OTP delivery: server log (watch this terminal for sign-in codes)");
+  }
+  if (AUTH_CONFIG.secretSource === "generated") {
+    console.log(
+      "[paise] auth secret generated and stored in the database. Set PAISE_AUTH_SECRET to pin it."
+    );
+  }
 });
