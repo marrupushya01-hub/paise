@@ -4,13 +4,14 @@
   "private": true,
   "type": "module",
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=22.5.0"
   },
   "scripts": {
-    "start": "node --env-file-if-exists=.env server.js",
-    "dev": "node --env-file-if-exists=.env --watch server.js",
+    "start": "node --disable-warning=ExperimentalWarning --env-file-if-exists=.env server.js",
+    "dev": "node --disable-warning=ExperimentalWarning --env-file-if-exists=.env --watch server.js",
     "test": "echo \"No tests yet\" && exit 0",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "reset-db": "node -e \"const fs=require('fs'),b=process.env.PAISE_DB_PATH||'./paise.db';for(const s of ['','-wal','-shm'])fs.rmSync(b+s,{force:true});console.log('[paise] removed '+b+' \u2014 it will be re-seeded on next start')\""
   },
   "dependencies": {
     "cors": "^2.8.6",
