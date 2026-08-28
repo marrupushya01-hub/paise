@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ask } from "@/lib/api";
+import { askStream } from "@/lib/api";
 import { ASK_SEED } from "@/data/mock";
 import { usePaise } from "@/lib/store";
 import { useSheetDrag } from "@/lib/useSheetDrag";
@@ -29,6 +29,9 @@ export default function AskSheet() {
   const inputRef = useRef(null);
   const panelRef = useRef(null);
   const exitTimer = useRef(null);
+  // Closing the sheet aborts the request, which makes the backend abort its
+  // own call to Ollama — an answer nobody will read stops being generated.
+  const askAbort = useRef(null);
 
   // Play the sheet out, then unmount it. Everything that closes the panel
   // goes through here so the exit reads the same from any trigger.
@@ -46,7 +49,13 @@ export default function AskSheet() {
   const { sheetRef, detent, dragging, handleProps, threadProps, toggle, expand, collapse } =
     useSheetDrag({ enabled: isPhone, onDismiss: dismiss });
 
-  useEffect(() => () => clearTimeout(exitTimer.current), []);
+  useEffect(
+    () => () => {
+      clearTimeout(exitTimer.current);
+      askAbort.current?.abort();
+    },
+    []
+  );
 
   useEffect(() => {
     const mq = window.matchMedia("(max-width: 899px)");
@@ -107,6 +116,10 @@ export default function AskSheet() {
     if (el) el.scrollTop = el.scrollHeight;
   }, [thread, pending]);
 
+  // The answer streams. An 8B model on CPU needs tens of seconds to finish a
+  // paragraph and about a second to start one, so the first tokens replace the
+  // pending row and the rest land in place — the wait becomes reading time
+  // instead of a spinner.
   async function send(question) {
     const text = question.trim();
     if (!text || pending) return;
@@ -114,15 +127,42 @@ export default function AskSheet() {
     setThread((t) => [...t, { role: "user", text }]);
     setDraft("");
     setPending(true);
+
+    const controller = new AbortController();
+    askAbort.current = controller;
+
+    let slot = -1;
+    const appendToken = (token) => {
+      setThread((t) => {
+        const next = [...t];
+        if (slot === -1) {
+          slot = next.length;
+          next.push({ role: "paise", text: token, streaming: true });
+        } else {
+          next[slot] = { ...next[slot], text: next[slot].text + token };
+        }
+        return next;
+      });
+      // The pending row goes away on the first token, not at the end.
+      setPending(false);
+    };
+
     try {
-      const { answer } = await ask(text);
-      setThread((t) => [...t, { role: "paise", text: answer }]);
+      const answer = await askStream(text, { onToken: appendToken, signal: controller.signal });
+      setThread((t) => {
+        const next = [...t];
+        if (slot === -1) next.push({ role: "paise", text: answer });
+        else next[slot] = { role: "paise", text: answer || next[slot].text };
+        return next;
+      });
     } catch (err) {
+      if (err.name === "AbortError") return;
       setThread((t) => [
         ...t,
         { role: "paise", text: `Couldn't reach Paise just now — ${err.message}` },
       ]);
     } finally {
+      askAbort.current = null;
       setPending(false);
     }
   }
@@ -293,8 +333,9 @@ function Message({ item, delay, onSuggestion }) {
   }
 
   return (
-    <div className="msg-paise msg-in" style={style}>
+    <div className={`msg-paise${item.streaming ? "" : " msg-in"}`} style={style}>
       {item.text}
+      {item.streaming && <span className="msg-caret" aria-hidden="true" />}
     </div>
   );
 }
