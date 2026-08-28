@@ -36,3 +36,8 @@ Desktop.ini
 pids/
 *.pid
 *.seed
+
+# SQLite database — seeded on first boot, never committed
+*.db
+*.db-wal
+*.db-shm
