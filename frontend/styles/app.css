@@ -1322,42 +1322,494 @@ button { font-family: var(--sans); }
 }
 .sheet__thread .pill-soft:active { transform: scale(0.97); }
 
-.trend-card {
+/* ─────────────────────────  charts in the thread  ────────────────────────
+   Eight presets share this shell (components/ChatChart.jsx). The look is the
+   design's original trend card generalised: a hairline card, a mono eyebrow,
+   thin marks with no gridlines, and the figure the answer is about set large
+   on the right.
+
+   Three specs are load-bearing and are written here rather than inline so
+   every preset gets them: marks cap at 24px and never fill their band, fills
+   are separated by a 2px gap in the surface colour rather than a stroke, and
+   text never wears a data colour — a swatch beside the label carries identity
+   instead. */
+
+.chart {
   border: 1px solid var(--line);
   border-radius: 20px;
-  padding: 15px 16px;
+  padding: 15px 16px 13px;
+  margin: 0;
   display: flex;
   flex-direction: column;
   gap: 12px;
+  background: var(--surface);
 }
 
-.trend-card__chart {
+.chart__title {
+  font: 500 10px/1.3 var(--mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted-2);
+}
+
+.chart__body {
   display: flex;
   align-items: flex-end;
   gap: 14px;
-  height: 74px;
 }
 
-.trend-bar { text-align: center; }
-.trend-bar__fill { width: 28px; border-radius: 4px; background: #e8ddd3; }
-.trend-bar__label {
-  font: 500 10px/1 var(--mono);
-  color: var(--muted-2);
+/* The plot owns the free space; the figure beside it takes only what it needs. */
+.chart__plot {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+
+.chart__aside {
+  flex: none;
+  text-align: right;
+  padding-bottom: 18px;
+}
+.chart__aside-value {
+  font: 500 19px/1 var(--sans);
+  color: var(--ink);
+}
+.chart__aside-delta {
+  font: 600 11px/1 var(--sans);
   margin-top: 6px;
 }
-.trend-bar.is-current .trend-bar__label { color: var(--ink-2); }
 
-.trend-card__total {
-  text-align: right;
+.chart__caption {
+  margin: 0;
+  font: 400 12px/1.45 var(--sans);
+  color: var(--muted);
 }
-.trend-card__total-value {
-  font: 500 19px/1 var(--sans);
+
+/* Hover and keyboard focus put the same thing here. */
+.chart__tip {
+  position: absolute;
+  bottom: calc(100% - 4px);
+  transform: translateX(-50%);
+  z-index: 2;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  white-space: nowrap;
+  pointer-events: none;
+  padding: 5px 9px;
+  border-radius: 8px;
+  background: var(--ink);
+  color: var(--on-dark);
+  box-shadow: 0 4px 12px rgb(27 26 22 / 0.14);
+}
+.chart__tip-label {
+  font: 500 9px/1 var(--mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  opacity: 0.62;
+}
+.chart__tip-value {
+  font: 500 11.5px/1 var(--sans);
   font-variant-numeric: tabular-nums;
 }
-.trend-card__total-delta {
-  font: 600 11px/1 var(--sans);
-  color: var(--rust);
+
+/* The values table. Present in the DOM and in the tab order on every chart, so
+   nothing is reachable by hover alone. */
+.chart__table > summary {
+  font: 500 10px/1 var(--mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--chevron);
+  cursor: pointer;
+  list-style: none;
+  padding: 2px 0;
+}
+.chart__table > summary::-webkit-details-marker { display: none; }
+.chart__table > summary:hover { color: var(--muted-2); }
+.chart__table table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 8px;
+}
+.chart__table th,
+.chart__table td {
+  font: 400 11.5px/1.5 var(--sans);
+  text-align: left;
+  padding: 3px 0;
+  color: var(--muted);
+  font-weight: 400;
+}
+.chart__table td {
+  text-align: right;
+  color: var(--ink-2);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The placeholder held while a ```paise-chart block is still streaming. */
+.chart--drawing {
+  min-height: 96px;
+  align-items: center;
+  justify-content: center;
+  border-style: dashed;
+  border-color: var(--line-strong);
+}
+.chart__drawing-label {
+  font: 500 10px/1 var(--mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--chevron);
+  animation: breathe 1.6s ease-in-out infinite;
+}
+
+/* ── bar & stacked ── */
+.chart-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+.chart-bars__col {
+  flex: 1;
+  min-width: 0;
+  /* Cap the mark, not the band: the leftover is deliberate air. */
+  max-width: 24px;
+  text-align: center;
+  cursor: default;
+  border: 0;
+  background: none;
+  padding: 0;
+}
+.chart-bars__col:focus-visible { outline: none; }
+.chart-bars__col:focus-visible .chart-bars__fill,
+.chart-bars__col:focus-visible .chart-bars__stack {
+  box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--green-border);
+}
+/* Rounded at the data end, square on the baseline. */
+.chart-bars__fill {
+  border-radius: 4px 4px 1px 1px;
+  transition: opacity 0.15s ease;
+}
+.chart-bars__col:hover .chart-bars__fill { opacity: 0.86; }
+.chart-bars__label {
+  font: 500 10px/1 var(--mono);
+  color: var(--muted-2);
+  margin-top: 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chart-bars__col.is-current .chart-bars__label { color: var(--ink-2); }
+
+.chart-bars__stack {
+  display: flex;
+  flex-direction: column-reverse;
+  border-radius: 4px 4px 1px 1px;
+  overflow: hidden;
+  /* The 2px separator between touching segments is surface-coloured space,
+     never a stroke around the fill. */
+  gap: 2px;
+}
+.chart-bars__seg { min-height: 2px; }
+
+/* ── line ── */
+.chart-line {
+  display: block;
+  width: 100%;
+  height: 74px;
+  overflow: visible;
+}
+/* Full-height hit columns rather than the 4px end dot — a marker you have to
+   land on dead-centre is not a target. */
+.chart-line__hits {
+  position: absolute;
+  inset: 0 0 20px;
+  display: flex;
+}
+.chart-line__hit {
+  flex: 1;
+  border: 0;
+  padding: 0;
+  background: none;
+  cursor: default;
+  border-radius: 4px;
+}
+.chart-line__hit:hover { background: rgb(178 95 60 / 0.06); }
+.chart-line__hit:focus-visible {
+  outline: none;
+  background: rgb(178 95 60 / 0.1);
+}
+.chart-line__axis {
+  display: flex;
   margin-top: 6px;
+}
+.chart-line__axis span {
+  flex: 1;
+  text-align: center;
+  font: 500 10px/1 var(--mono);
+  color: var(--muted-2);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── donut ── */
+.chart-donut {
+  position: relative;
+  width: 128px;
+  margin: 0 auto;
+}
+.chart-donut svg { display: block; width: 100%; }
+.chart-donut circle {
+  transition: opacity 0.15s ease;
+  cursor: default;
+}
+.chart-donut circle:hover { opacity: 0.82; }
+.chart-donut circle:focus-visible { outline: none; opacity: 0.82; }
+.chart-donut__centre {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+.chart-donut__total {
+  font: 500 17px/1 var(--sans);
+  color: var(--ink);
+}
+.chart-donut__caption {
+  font: 500 9px/1 var(--mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted-2);
+  margin-top: 5px;
+}
+
+/* ── legend ── */
+.chart-legend {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.chart-legend li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font: 400 12.5px/1.3 var(--sans);
+}
+.chart-legend--inline {
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+}
+.chart-legend__swatch {
+  width: 9px;
+  height: 9px;
+  border-radius: 3px;
+  flex: none;
+}
+.chart-legend__name {
+  color: var(--ink-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chart-legend__value {
+  margin-left: auto;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+.chart-legend__pct {
+  width: 34px;
+  text-align: right;
+  color: var(--muted-2);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── breakdown ── */
+.chart-rank {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+}
+.chart-rank li {
+  display: grid;
+  grid-template-columns: 9px minmax(0, 1fr) 1.35fr auto 34px;
+  align-items: center;
+  gap: 8px;
+}
+.chart-rank__swatch {
+  width: 9px;
+  height: 9px;
+  border-radius: 3px;
+}
+.chart-rank__name {
+  font: 400 12.5px/1.3 var(--sans);
+  color: var(--ink-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chart-rank__track {
+  height: 8px;
+  border-radius: 4px;
+  background: var(--track);
+  overflow: hidden;
+}
+.chart-rank__fill {
+  display: block;
+  height: 100%;
+  border-radius: 4px;
+}
+.chart-rank__value {
+  font: 500 12.5px/1 var(--sans);
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+.chart-rank__pct {
+  font: 400 11px/1 var(--sans);
+  color: var(--muted-2);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── compare ── */
+.chart-compare {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 40px;
+  padding-top: 4px;
+}
+.chart-compare__col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 56px;
+}
+.chart-compare__value {
+  font: 500 13px/1 var(--sans);
+  color: var(--ink);
+  margin-bottom: 8px;
+  font-variant-numeric: tabular-nums;
+}
+.chart-compare__fill {
+  width: 24px;
+  border-radius: 4px 4px 1px 1px;
+}
+.chart-compare__label {
+  font: 500 10px/1 var(--mono);
+  color: var(--muted-2);
+  margin-top: 8px;
+  text-align: center;
+}
+.chart-compare__delta {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  font: 600 12px/1 var(--sans);
+  background: var(--surface);
+  padding: 3px 6px;
+  border-radius: 6px;
+}
+
+/* ── progress ── */
+.chart-meters {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 13px;
+  width: 100%;
+}
+.chart-meters__head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 7px;
+}
+.chart-meters__name {
+  font: 400 12.5px/1.3 var(--sans);
+  color: var(--ink-2);
+}
+.chart-meters__value {
+  margin-left: auto;
+  font: 500 12.5px/1 var(--sans);
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+.chart-meters__target {
+  font-weight: 400;
+  color: var(--muted-2);
+}
+.chart-meters__track {
+  position: relative;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--track);
+}
+.chart-meters__fill {
+  height: 100%;
+  border-radius: 4px;
+}
+.chart-meters__over {
+  font-weight: 600;
+  color: var(--rust);
+  margin-left: 6px;
+}
+
+/* ── stat ── */
+.chart-stats {
+  display: flex;
+  gap: 22px;
+  flex-wrap: wrap;
+}
+.chart-stats__tile { min-width: 0; }
+.chart-stats__label {
+  font: 500 10px/1 var(--mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted-2);
+  margin-bottom: 8px;
+}
+/* Proportional figures, not tabular: at this size equal-width digits read
+   loose. tabular-nums stays on the columns that have to line up. */
+.chart-stats__value {
+  font: 500 24px/1 var(--sans);
+  color: var(--ink);
+}
+.chart-stats__delta {
+  font: 600 11px/1 var(--sans);
+  margin-top: 7px;
+}
+.chart-stats__note {
+  font: 400 11.5px/1.4 var(--sans);
+  color: var(--muted);
+  margin-top: 6px;
+}
+
+/* An answer is prose and charts interleaved, so the paragraphs inside it keep
+   the thread's own rhythm rather than the browser's. */
+.msg-answer {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  animation: msg-in 0.34s var(--ease-out-quart) var(--msg-delay, 0ms) both;
+}
+.msg-answer .msg-paise { margin: 0; }
+.msg-strong { font-weight: 600; color: var(--ink); }
+.msg-amount { color: var(--rust); font-weight: 500; }
+
+@media (prefers-reduced-motion: reduce) {
+  .chart__drawing-label { animation: none; opacity: 0.7; }
 }
 
 .sheet__composer {
