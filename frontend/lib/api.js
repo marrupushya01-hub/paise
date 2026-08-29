@@ -114,6 +114,19 @@ export function getSubscriptions({ forgotten } = {}) {
   return request(`/api/subscriptions${forgotten ? "?forgotten=true" : ""}`);
 }
 
+// The full ledger. /api/user-data carries only the most recent rows; this is
+// how a screen or a question reaches the six months behind them.
+export function getTransactions({ month, category, direction, limit, offset } = {}) {
+  const q = new URLSearchParams();
+  if (month) q.set("month", month);
+  if (category) q.set("category", category);
+  if (direction) q.set("direction", direction);
+  if (limit) q.set("limit", String(limit));
+  if (offset) q.set("offset", String(offset));
+  const query = q.toString();
+  return request(`/api/transactions${query ? `?${query}` : ""}`);
+}
+
 export function getSpendingTrend(category, months = 3) {
   return request(
     `/api/spending-trend?category=${encodeURIComponent(category)}&months=${months}`

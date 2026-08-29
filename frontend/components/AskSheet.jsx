@@ -1,10 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { askStream } from "@/lib/api";
 import { ASK_SEED } from "@/data/mock";
+import { splitAnswer } from "@/lib/chartSpec";
 import { usePaise } from "@/lib/store";
 import { useSheetDrag } from "@/lib/useSheetDrag";
+import ChatChart from "./ChatChart";
 import TrendCard from "./TrendCard";
 
 // Bottom sheet for "Ask Paise". Opens on the design's seeded exchange;
@@ -18,7 +20,10 @@ const EXIT_MS = 220;
 const SEED_STEP = 45;
 
 export default function AskSheet() {
-  const { closeAsk } = usePaise();
+  const { closeAsk, userData } = usePaise();
+  // The category palette, so a chart the assistant asks for paints "Food &
+  // delivery" the colour it is on every other screen.
+  const categories = userData?.categories;
   const [thread, setThread] = useState(ASK_SEED);
   const [draft, setDraft] = useState("");
   const [pending, setPending] = useState(false);
@@ -247,6 +252,7 @@ export default function AskSheet() {
               key={item.id ?? `seed-${i}`}
               item={item}
               delay={i < ASK_SEED.length ? 90 + i * SEED_STEP : 0}
+              categories={categories}
               onSuggestion={send}
             />
           ))}
@@ -292,7 +298,7 @@ export default function AskSheet() {
   );
 }
 
-function Message({ item, delay, onSuggestion }) {
+function Message({ item, delay, categories, onSuggestion }) {
   const style = { "--msg-delay": `${delay}ms` };
 
   if (item.role === "user")
@@ -327,6 +333,7 @@ function Message({ item, delay, onSuggestion }) {
     );
   }
 
+  // The design's own seeded turns, which colour their own amounts.
   if (item.segments) {
     return (
       <div className="msg-paise msg-in" style={style}>
@@ -344,9 +351,81 @@ function Message({ item, delay, onSuggestion }) {
   }
 
   return (
-    <div className={`msg-paise${item.streaming ? "" : " msg-in"}`} style={style}>
-      {item.text}
-      {item.streaming && <span className="msg-caret" aria-hidden="true" />}
+    <AnswerBody
+      text={item.text}
+      streaming={item.streaming}
+      categories={categories}
+      style={style}
+    />
+  );
+}
+
+// A live answer is prose with charts in it. splitAnswer() keeps the two apart
+// while the text is still arriving, so an unfinished ```paise-chart block is
+// never shown as raw JSON — it holds a placeholder until the closing fence
+// lands, and then becomes a chart in place.
+function AnswerBody({ text, streaming, categories, style }) {
+  const segments = useMemo(() => splitAnswer(text), [text]);
+
+  return (
+    <div className="msg-answer" style={style}>
+      {segments.map((segment, i) => {
+        if (segment.kind === "chart") {
+          return (
+            <div className="msg-answer__chart" key={`chart-${i}`}>
+              <ChatChart spec={segment.spec} categories={categories} />
+            </div>
+          );
+        }
+        if (segment.kind === "pending") {
+          return (
+            <div className="msg-answer__chart chart chart--drawing" key={`drawing-${i}`}>
+              <span className="chart__drawing-label">drawing chart…</span>
+            </div>
+          );
+        }
+        const last = i === segments.length - 1;
+        // No entrance animation on the paragraphs: the wrapper already plays
+        // one, and re-adding it when `streaming` flips false would replay the
+        // rise the moment the answer finishes.
+        return (
+          <p className="msg-paise" key={`text-${i}`}>
+            <Prose text={segment.text} />
+            {streaming && last && <span className="msg-caret" aria-hidden="true" />}
+          </p>
+        );
+      })}
     </div>
   );
+}
+
+// Amounts are the load-bearing part of any answer here, so they are given the
+// same rust the design gives them in the seeded thread. `**bold**` is the one
+// piece of markdown the prompt allows, and it is the only one honoured — the
+// rest is left as written rather than half-rendered.
+const RUPEES_SPLIT = /(₹\s?[\d,]+(?:\.\d+)?\s?(?:L|Cr|k)?)/g;
+// A separate, non-global copy: `test()` on a /g regex carries lastIndex
+// between calls and starts skipping matches.
+const RUPEES_TEST = /^₹\s?[\d,]+/;
+
+function Prose({ text }) {
+  const parts = String(text).split(/(\*\*[^*]+\*\*)/g);
+  return parts.map((part, i) => {
+    if (part.startsWith("**") && part.endsWith("**") && part.length > 4) {
+      return (
+        <strong key={i} className="msg-strong">
+          {part.slice(2, -2)}
+        </strong>
+      );
+    }
+    return part.split(RUPEES_SPLIT).map((chunk, j) =>
+      RUPEES_TEST.test(chunk) ? (
+        <span key={`${i}-${j}`} className="msg-amount">
+          {chunk}
+        </span>
+      ) : (
+        <span key={`${i}-${j}`}>{chunk}</span>
+      )
+    );
+  });
 }
