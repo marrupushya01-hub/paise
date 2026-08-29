@@ -54,6 +54,8 @@ import {
   getSubscriptions,
   getTrendSlugs,
   getUserData,
+  countTransactions,
+  listTransactions,
   restoreInsight,
   saveSettings,
   seededNow,
@@ -77,18 +79,103 @@ const OLLAMA_URL = process.env.OLLAMA_URL || "http://127.0.0.1:11434/api/generat
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || "qwen3:8b";
 // Prompts larger than the context window do not truncate — they wedge the
 // Ollama runner at 100% CPU and every later request queues behind it. The
-// snapshot below is ~1KB, so 8192 is generous, but keep them in step if the
-// context ever grows.
+// system prompt is ~900 tokens and the snapshot another ~900, so 8192 leaves
+// most of the window for the answer. Keep them in step if either grows.
 const OLLAMA_NUM_CTX = Number(process.env.OLLAMA_NUM_CTX) || 8192;
 // An 8B model on CPU answers in tens of seconds, not the ~2s a hosted API
-// takes. Anything under a minute here just turns slow answers into 502s.
-const OLLAMA_TIMEOUT_MS = Number(process.env.OLLAMA_TIMEOUT_MS) || 120000;
+// takes, and a prompt that asks it to reason before writing pushes that
+// further. Measured at ~100s for a full answer plus a chart on this hardware,
+// so the ceiling is three minutes rather than two. The streaming path starts
+// delivering long before either.
+const OLLAMA_TIMEOUT_MS = Number(process.env.OLLAMA_TIMEOUT_MS) || 180000;
 
-const SYSTEM_PROMPT =
-  "You are Paise, a concise personal-finance assistant. Answer using only the " +
-  "financial context provided by the app. Keep answers short and direct. " +
-  "Never invent numbers that weren't given to you. Every amount is in Indian " +
-  "rupees — write them with a rupee sign, never a dollar sign.";
+// ---------------------------------------------------------------------------
+// The Ask Paise prompt
+//
+// Two things it has to do that the old one-paragraph version did not.
+//
+// First, make the model *reason* before it writes. A question about money
+// almost always has a comparison hiding in it — "did I overspend?" is
+// unanswerable without a baseline — and an 8B model left to its own devices
+// will happily restate the number it was given and stop. The thinking steps
+// below are the difference between "you spent ₹11,900 on food" and "food is
+// ₹4,200 over July, and ₹8,100 of that landed on Fri–Sun".
+//
+// Second, let an answer carry a chart. The model appends a fenced
+// ```paise-chart block holding a small JSON spec — a preset name and the data
+// points — and the client renders it with the app's own chart components
+// (frontend/lib/chartSpec.js, frontend/components/ChatChart.jsx). The model
+// never emits colours it invented, never emits markup, and never emits a
+// number that was not in the snapshot; it chooses a shape and points at data.
+// Everything about how that shape looks is the frontend's business.
+//
+// Kept in one template literal rather than assembled from parts: it is a
+// document the model reads top to bottom, and it should be readable that way
+// here too.
+// ---------------------------------------------------------------------------
+const SYSTEM_PROMPT = `You are Paise, a personal-finance analyst built into an Indian money app. You answer one person's questions about their own money, using only the financial snapshot the app gives you.
+
+THINK BEFORE YOU WRITE (silently — never show these steps):
+1. Turn the question into something measurable.
+2. Find the number that answers it AND the baseline it must be judged against: last month, the six-month average, or the budget. A number with no comparison is not an answer.
+3. Find the driver. Which category, merchant, or day-type actually moved, and by how much? Check the others really did hold steady before you say they did.
+4. Work out the single lever that would change the outcome, and size it in rupees.
+5. Drop everything the person did not ask about.
+
+HOW TO WRITE:
+- Open with the answer. Never with "Based on your data" or "Looking at your spending".
+- 40 to 80 words. Short sentences. Plain words.
+- Put a number on every claim. Rupees with a ₹ sign, Indian digit grouping, no decimals, never a dollar sign.
+- Name the driver and its size: "food, ₹4,200 above July" beats "you spent more than usual".
+- Finish with one concrete thing to do, and what it is worth in rupees.
+- If the snapshot cannot answer the question, say precisely what is missing. Never estimate. Never invent a number, a merchant, or a month that is not in the snapshot.
+- Do no arithmetic. Averages, month-on-month changes, percentages and weekend splits are already computed for you on each category row — read the field, never divide anything yourself.
+- For anything about the budget, use the \`budgetStatus\` sentence exactly as written. It already says whether the month is over or under, and rephrasing it is how that gets stated backwards.
+- No headings, no bullet lists unless you are comparing three or more named things.
+
+CHARTS:
+Nearly every answer needs one. Attach a chart whenever your answer names more than one month, compares two things, or gives a share of a total — that is most questions about money. Skip it only when the answer is a single figure with nothing to compare it to. One chart; two only if the question genuinely has two parts. It goes after the prose, as a fenced block:
+
+\`\`\`paise-chart
+{"type":"bar","title":"food & delivery · last 6 months","unit":"inr","caption":"August is the outlier","data":[{"label":"MAR","value":5800},{"label":"APR","value":6450},{"label":"MAY","value":7100},{"label":"JUN","value":6200},{"label":"JUL","value":7700},{"label":"AUG","value":11900}]}
+\`\`\`
+
+Block rules: one line of valid JSON, no comments, no trailing commas. Every value must be a number that is already in the snapshot. At most 8 data points. Labels 2-14 characters. Title lowercase. Do not describe the chart in the prose — it is shown, not narrated.
+
+Choose the type from what the answer actually is:
+- "bar" — one series over time. For "is this going up?". data: [{label, value}]
+- "line" — a longer or denser series: daily spend, net worth. data: [{label, value}]
+- "donut" — how one total splits, 2 to 6 slices. data: [{label, value}]
+- "breakdown" — a ranked list with amounts: categories, merchants. data: [{label, value}]
+- "compare" — exactly two things against each other. data: [{label, value}]
+- "stacked" — composition changing over time. data: [{label, parts: [{label, value}]}]
+- "progress" — spend against budget, or a goal. data: [{label, value, target}]
+- "stat" — one to three headline figures. data: [{label, value, delta}]
+
+Pick by what the labels are, not by habit: months or days on the labels means "bar" or "line"; names of categories or merchants means "breakdown" or "donut". Never put category names on a bar chart.
+
+Optional per-point "color", from: rust, indigo, teal, gold, plum, green, muted.
+Optional top-level "caption" (one short clause) and "unit" ("inr" by default, or "pct", "count").
+
+EVERY ANSWER HAS TWO PARTS, IN THIS ORDER: the prose, then the fenced paise-chart block. Do not stop after the prose.
+
+WORKED EXAMPLE —
+Question: "why is my food spend so high?"
+
+Weekends. Food hit ₹11,900 in August against ₹7,700 in July, and ₹8,100 of that was 11 Fri-Sun orders averaging ₹736. Weekday food actually fell ₹600. Cook one weekend dinner a week and you land back near July without giving up a night out.
+
+\`\`\`paise-chart
+{"type":"bar","title":"food & delivery · last 6 months","unit":"inr","caption":"August is the outlier","data":[{"label":"MAR","value":5800},{"label":"APR","value":6450},{"label":"MAY","value":7100},{"label":"JUN","value":6200},{"label":"JUL","value":7700},{"label":"AUG","value":11900}]}
+\`\`\``;
+
+// The account's tone setting shapes the assistant the same way it shapes the
+// insight cards, rather than being a Money-tab-only idea.
+const TONE_NOTE = {
+  Direct:
+    "TONE: blunt and unsentimental. State the problem, state the fix. No reassurance, no softeners.",
+  Warm:
+    "TONE: warm and plain-spoken. Same numbers, same honesty, but frame the fix as easy rather than as a failure.",
+};
 
 // The three private IPv4 ranges (RFC 1918). Deliberately no 169.254.0.0/16
 // and no IPv6 — a phone on a hotspot always lands in one of these.
@@ -470,9 +557,48 @@ app.get("/api/spending-trend", requireSession, (req, res) => {
   if (!category || !known.includes(category)) {
     return res.status(400).json({ error: `\`category\` must be one of: ${known.join(", ")}` });
   }
+  // The ledger is six months deep. Three stays the default because that is
+  // what the Ask sheet's seeded card asks for.
   const monthsParam = Number(req.query.months) || 3;
-  const months = Math.min(Math.max(monthsParam, 1), 12);
+  const months = Math.min(Math.max(monthsParam, 1), 24);
   res.json({ category, trend: getSpendingTrend(req.userId, category, months) });
+});
+
+// The full ledger. /api/user-data carries only the most recent dozen rows,
+// which is what the Money tab renders; everything behind that comes from here.
+app.get("/api/transactions", requireSession, (req, res) => {
+  const known = getTrendSlugs(req.userId);
+  const { month, category, direction } = req.query;
+
+  if (month !== undefined && !/^\d{4}-\d{2}$/.test(month)) {
+    return res.status(400).json({ error: "`month` must be in YYYY-MM form." });
+  }
+  if (category !== undefined && !known.includes(category)) {
+    return res.status(400).json({ error: `\`category\` must be one of: ${known.join(", ")}` });
+  }
+  if (direction !== undefined && direction !== "in" && direction !== "out") {
+    return res.status(400).json({ error: "`direction` must be \"in\" or \"out\"." });
+  }
+
+  const filters = {
+    month: month ?? null,
+    slug: category ?? null,
+    direction: direction ?? null,
+  };
+  const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 200);
+  const offset = Math.max(Number(req.query.offset) || 0, 0);
+
+  const transactions = listTransactions(req.userId, { ...filters, limit, offset });
+  res.json({
+    total: countTransactions(req.userId, filters),
+    limit,
+    offset,
+    // Merchant and amount identify spending as surely as a balance does, so
+    // the same mask the other routes apply is applied here.
+    transactions: privacyRequested(req)
+      ? transactions.map((t) => ({ ...t, merchant: "•••", amount: null, detail: null }))
+      : transactions,
+  });
 });
 
 app.get("/api/portfolio", requireSession, (req, res) => {
@@ -526,16 +652,18 @@ app.delete("/api/dismissed/:insightId", requireSession, (req, res) => {
 // and the question is length-capped before it is embedded in the prompt.
 // ---------------------------------------------------------------------------
 
-function ollamaBody(snapshot, question, stream) {
+function ollamaBody(snapshot, question, stream, tone) {
   return JSON.stringify({
     model: OLLAMA_MODEL,
-    system: SYSTEM_PROMPT,
+    system: `${SYSTEM_PROMPT}\n\n${TONE_NOTE[tone] || TONE_NOTE.Direct}`,
     prompt: `User's financial snapshot:\n${JSON.stringify(snapshot)}\n\nQuestion: ${question}`,
     stream,
     // qwen3 and other hybrid-reasoning models spend their entire budget in
     // `thinking` and return an empty `response` unless this is off.
     think: false,
-    options: { temperature: 0.1, num_ctx: OLLAMA_NUM_CTX },
+    // Low, but not zero: at 0.1 the model repeats one sentence shape for
+    // every question. The numbers come from the snapshot either way.
+    options: { temperature: 0.35, top_p: 0.9, num_ctx: OLLAMA_NUM_CTX },
   });
 }
 
@@ -571,7 +699,7 @@ app.post("/api/ask", requireSession, askLimiter, async (req, res, next) => {
       upstream = await fetch(OLLAMA_URL, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: ollamaBody(snapshot, question, wantsStream),
+        body: ollamaBody(snapshot, question, wantsStream, getSettings(req.userId).tone),
         signal: controller.signal,
       });
     } catch (err) {
@@ -699,7 +827,13 @@ app.listen(PORT, "0.0.0.0", () => {
   for (const { name, address } of lanAddresses()) {
     console.log(`[paise]                     http://${address}:${PORT}  (${name})`);
   }
-  console.log(`[paise] database: ${s.path}${seededNow ? " (seeded)" : ""} · ${s.users} account(s)`);
+  const seedNote =
+    seededNow === "fresh"
+      ? " (seeded)"
+      : seededNow === "migrated"
+        ? " (template rebuilt — every account is on the new dataset)"
+        : "";
+  console.log(`[paise] database: ${s.path}${seedNote} · ${s.users} account(s)`);
   console.log(`[paise] allowed origins: ${ALLOWED_ORIGINS.join(", ")}`);
   if (ALLOW_LAN_ORIGINS) {
     console.log("[paise] plus any private-range LAN origin (ALLOW_LAN_ORIGINS=true)");
