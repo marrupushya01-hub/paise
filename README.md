@@ -51,10 +51,11 @@ above 900px the same screens lay out for a desktop window. Not two products.
 | 📈 | **Invest** | Portfolio, holdings, active SIPs, goals, idle-cash forecast |
 | 🔐 | **Real sign-in** | Phone + one-time code — hashed, expiring, single-use, attempt-capped |
 | 💬 | **Ask Paise** | Bottom sheet over any screen — local LLM answers, streamed, grounded in your figures only |
+| 📊 | **Answers that draw** | The model appends a `paise-chart` spec; the client renders it with eight in-house presets — bar, line, donut, stacked, breakdown, compare, progress, stat |
 | 🎚️ | **Assistant tone** | `Direct` or `Warm` — refetches and rewrites every insight card |
 | 🙈 | **Hide balances** | One switch, enforced on the server — the hidden figures never reach the browser |
 | 🔁 | **Subscription detection** | Recurring charges surfaced, "forgotten" ones flagged |
-| 📉 | **Spending trends** | Per-category Jun/Jul/Aug bars in the Ask sheet |
+| 📉 | **Spending trends** | Six months per category, derived from a real generated ledger rather than asserted |
 | 🦴 | **Measured skeletons** | Silhouettes settle to the real box, then wipe — no layout jump, no flash |
 | 🖐️ | **Drag physics** | Two-detent sheet with fling detection, driven by CSS vars at zero React renders |
 | 🧭 | **Lane-aware transitions** | Route direction inferred from screen lanes — Home → Money slides right, back slides left |
@@ -140,7 +141,7 @@ paise/
 └── frontend/
     ├── app/                 # route shells (server components, metadata only)
     ├── screens/             # one file per route — Home, Money, Invest, Settings…
-    ├── components/          # AppShell, AskSheet, Skeleton pipeline, TabBar…
+    ├── components/          # AppShell, AskSheet, ChatChart, Skeleton pipeline, TabBar…
     ├── lib/                 # api client, session, store, formatters, hooks
     ├── data/mock.js         # what's left: the feature card and the Ask seed
     └── styles/              # tokens · app (phone) · desktop · skeleton
@@ -163,18 +164,20 @@ Everything under `/api` except the two `auth` entry points requires
 | `GET` | `/api/auth/me` | 🔐 | Resolve the token → profile + settings |
 | `POST` | `/api/auth/logout` | 🔐 | Destroys this session server-side |
 | `POST` | `/api/auth/logout-all` | 🔐 | Destroys every session for the account |
-| `GET` | `/api/user-data` | 🔐 | Net worth, milestones, safe-to-spend, forecast, categories, transactions, accounts |
+| `GET` | `/api/user-data` | 🔐 | Net worth, milestones, safe-to-spend, forecast, categories, 12 most recent transactions, accounts |
+| `GET` | `/api/transactions` | 🔐 | Full ledger — `?month=&category=&direction=&limit=&offset=` |
 | `GET` | `/api/portfolio` | 🔐 | Portfolio, holdings, SIPs, goals |
 | `GET` | `/api/profile` | 🔐 | Name, initials, phone, age |
 | `GET` | `/api/insights` | 🔐 | Home assistant cards — `?tone=Direct\|Warm` |
 | `GET` | `/api/screen-insights` | 🔐 | Money / Invest cards — `?screen=money\|invest` |
 | `GET` | `/api/subscriptions` | 🔐 | Recurring charges — `?forgotten=true` |
-| `GET` | `/api/spending-trend` | 🔐 | `?category=<slug>&months=1-12` |
+| `GET` | `/api/spending-trend` | 🔐 | `?category=<slug>\|all&months=1-24` |
 | `GET` `PATCH` | `/api/settings` | 🔐 | `{ privacyMode, tone }` — the account's, not the device's |
 | `GET` `POST` `DELETE` | `/api/dismissed` | 🔐 | Cards closed with "Not now", per account |
 | `POST` | `/api/ask` | 🔐 | `{ question }` → `{ answer }`, or SSE with `Accept: text/event-stream` |
 
-Category slugs: `food-delivery`, `rent`, `travel-cabs`, `subscriptions`, `shopping`.
+Category slugs: `food-delivery`, `rent`, `travel-cabs`, `subscriptions`, `shopping`
+(plus `all` on `/api/spending-trend`).
 Full request/response shapes: **[backend/README.md](./backend/README.md)**
 
 ---
