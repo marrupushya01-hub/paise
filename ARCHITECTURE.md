@@ -176,7 +176,7 @@ sequenceDiagram
     E->>E: askLimiter — 10/min per session
     E->>E: reject non-string / empty / >500 chars → 400
     E->>E: getModelSnapshot(userId) from SQLite<br/>+ system prompt (₹ enforced)
-    E->>O: POST /api/generate {stream:true, think:false,<br/>temperature:0.1, num_ctx:8192} + AbortController
+    E->>O: POST /api/generate {stream:true, think:false,<br/>temperature:0.35, num_ctx:8192} + AbortController
     loop until done
         O-->>E: NDJSON { response, done:false }
         E-->>C: event: token · data {text}
@@ -188,7 +188,7 @@ sequenceDiagram
         A->>C: signal.abort()
         C->>E: connection drops
         E->>O: AbortController — generation stops
-    else abort at OLLAMA_TIMEOUT_MS (120s)
+    else abort at OLLAMA_TIMEOUT_MS (180s)
         E-->>C: 504 "The assistant took too long to answer."
     else connection refused / upstream non-2xx
         E-->>C: 502 "The assistant is temporarily unavailable."
@@ -205,11 +205,78 @@ sequenceDiagram
   spend the entire token budget in `thinking` and return an empty `response`.
 - `num_ctx` must stay ahead of the prompt. An oversized prompt is **not**
   truncated by Ollama — it wedges the runner at 100% CPU and every later
-  request queues behind it. The snapshot is ~1KB against an 8192 window.
+  request queues behind it. The system prompt is ~900 tokens and the snapshot
+  ~1,000, against an 8192 window.
 - Upstream error bodies are logged server-side and never forwarded; clients get
   a fixed generic string. Same policy in the 500 handler.
-- 120s is deliberate: an 8B model on CPU answers in tens of seconds, so a
-  shorter timeout converts slow answers into 502s.
+- 180s is deliberate: an 8B model on CPU answers in tens of seconds, and a
+  prompt that asks it to reason first pushes that to about 100s. A shorter
+  timeout converts slow answers into 502s.
+
+### The snapshot is shaped for an 8B model, not for a human
+
+`getModelSnapshot()` is not a dump of the account. Three decisions in it exist
+because of specific failures observed with qwen3:8b:
+
+| Decision | The failure it fixes |
+|---|---|
+| Every quotient precomputed (`avgWeekendPayment`, `vsLastMonthPct`, `sixMonthAvg`) | Asked for "11 weekend orders averaging X", the model divided the month's whole category total by 11 and was 47% wrong |
+| Self-describing keys, no positional tuples | `[weekend, weekday, weekendCount, weekdayCount]` had the weekend total read out of the month-change slot and quoted as a month-on-month change |
+| `budgetStatus` as a finished sentence | Both a signed number and a boolean were read backwards — "₹3,580 over budget" when ₹3,580 was what remained |
+
+The pattern: for anything the model gets wrong by reasoning, hand it the
+conclusion. It costs a few hundred bytes of context and removes a class of
+error that no amount of prompt wording did.
+
+## Core workflow 2b — answers that draw
+
+An answer can carry a chart. The model appends a fenced block; the client
+renders it. The model never emits markup, colours, or sizes.
+
+````text
+Weekends. Food hit ₹11,900 in August against ₹7,700 in July …
+
+```paise-chart
+{"type":"bar","title":"food & delivery · last 6 months",
+ "data":[{"label":"JUL","value":7700},{"label":"AUG","value":11900}]}
+```
+````
+
+```mermaid
+flowchart LR
+    M["model output<br/>prose + fenced block"] --> S["splitAnswer()<br/>lib/chartSpec.js"]
+    S --> T["text segments"]
+    S --> P["pending<br/>(fence still open)"]
+    S --> V["parseChart()"]
+    V --> R{"valid?"}
+    R --"no"--> X["dropped — the prose<br/>still answers"]
+    R --"yes"--> N["normalise + coerce form"]
+    N --> C["ChatChart.jsx<br/>eight presets"]
+    T --> B["Prose — ₹ amounts accented"]
+```
+
+- **The model chooses a shape, never an appearance.** `type` is one of eight
+  names; colour may only be one of seven *tokens*. A hex it invented is
+  discarded. Nothing it writes reaches the DOM as markup.
+- **Everything is bounded.** Unknown types are rejected, arrays capped (8
+  points, 6 donut slices, 5 stack parts), labels truncated, values coerced to
+  finite numbers. A malformed block renders as nothing rather than as an error.
+- **Forms are corrected, not just accepted.** A one-bar bar chart and a
+  two-slice donut are both really a figure, so they are redrawn as `stat` and
+  `breakdown`. A `progress` with no target becomes a `breakdown`.
+- **Streaming is handled at the split.** While the closing fence has not
+  arrived the tail is a `pending` segment, so half-written JSON is never shown
+  as text.
+- **Colour has two jobs and two palettes.** An ordered series (months, days)
+  gets one hue stepped light→dark by position — never by value, which would
+  double-encode bar height. A set of named things gets the category's own
+  colour from the rest of the app, so "the rust one" means the same thing in a
+  chat answer as on the Money tab. The categorical order was fixed by running
+  the palette through a CVD validator: worst adjacent pair ΔE 8.4 under
+  deuteranopia, 16.9 under normal vision.
+- **Nothing is reachable by hover alone.** Every preset ships a collapsed
+  `<details>` table of its own values, and hover and keyboard focus show the
+  same tooltip.
 
 ## Core workflow 3 — sheet drag physics
 
@@ -263,6 +330,53 @@ seeded on first boot. The template dataset in `seed.js` is loaded once under
 the reserved owner id **0**; every account provisioned by a verified code gets
 its own row-level clone of it, so two phones signing in no longer share one
 object.
+
+`seed.js` carries a `TEMPLATE_VERSION`. When it moves, boot drops every data
+row, rewrites the template, and re-clones it into every existing account —
+users, sessions, settings and dismissals are untouched, so a dataset change
+does not sign anyone out or hand back a card they had closed. New *columns* on
+existing tables are added by `ensureColumn()`, because `CREATE TABLE IF NOT
+EXISTS` never alters one.
+
+### The fixture is a ledger, and everything else is derived from it
+
+The dataset used to be six hand-written August transactions plus a set of
+totals asserted alongside them. That is enough to draw the screens and not
+enough to answer a question: "is this normal for me?" had no second data point,
+and the totals could drift from the rows without anything noticing.
+
+`seed.js` now generates a **six-month ledger** — 2026-03-01 to the fixture's
+own "today", 2026-08-26 — and the category totals, the trend series, the
+weekend splits and the model's snapshot are all computed *from* it, in SQL.
+
+```mermaid
+flowchart TD
+    T["MONTH_TARGETS<br/>per category, per month"] --> G["generator<br/>seeded mulberry32"]
+    P["PINNED<br/>the 6 hand-written rows<br/>+ their written detail copy"] --> G
+    R["merchant pools<br/>weights + ticket bands"] --> G
+    G --> F["fitToTotal()<br/>scale to hit the target exactly"]
+    F --> L["~300 transactions"]
+    L --> C["TEMPLATE_CATEGORIES<br/>amount · payments · pct"]
+    L --> TR["TEMPLATE_TRENDS<br/>6 points per category"]
+    L --> SN["spentThisMonth · spentVsLastMonth"]
+    L --> Q["SQL aggregates → getModelSnapshot()"]
+```
+
+Two rules make that safe to do:
+
+1. **Every number the design already showed is a target, not an output.** The
+   Jun/Jul/Aug rows of `MONTH_TARGETS` reproduce the old trend series to the
+   rupee, and `FOOD_WEEKEND_TARGET` pins August weekend food at ₹8,100 across
+   11 Fri–Sun orders. So the insight copy, the seeded Ask thread and the Money
+   tab all still say true things — but now they are *checkable*, because the
+   rows they describe exist. The six hand-written transactions are pinned into
+   August verbatim and their amounts are spent against the target rather than
+   added to it.
+2. **Generation is deterministic.** One seeded PRNG, no `Math.random`, no
+   `new Date()`. Two boots produce identical rows, so a demo never shifts.
+
+The one number that moved: `spentVsLastMonth` was 4,200 (which is the *food*
+delta, not the month's) and is now the ledger's own arithmetic, 6,180.
 
 ```mermaid
 erDiagram
@@ -429,14 +543,18 @@ backend/
                     data routes · /api/ask with an SSE branch · 404 ·
                     error handler (CORS → 403, 413, else generic 500) ·
                     expiry sweep every 10 min · listen on 0.0.0.0
-  db.js             731 lines. Schema DDL, the one-time template seed, the
-                    per-account clone, and every read — all scoped by user id,
-                    all through prepared statements.
+  db.js             Schema DDL, the versioned template seed, the per-account
+                    clone, the SQL aggregates behind the model snapshot, and
+                    every read — all scoped by user id, all through prepared
+                    statements.
   auth.js           184 lines. OTP issue/verify, session mint/resolve/revoke,
                     HMAC pepper (env or generated-and-stored), timing-safe
                     compare, phone normalisation, expiry sweep.
-  seed.js           302 lines. The template dataset, in one place. Nothing
-                    reads it at request time.
+  seed.js           The template dataset: targets, pinned rows, and a seeded
+                    generator that builds a six-month ledger from them. The
+                    category totals and trend series are derived from that
+                    ledger, not asserted beside it. Nothing reads this file at
+                    request time.
   .env.example      PORT · ALLOWED_ORIGINS · ALLOW_LAN_ORIGINS ·
                     PAISE_DB_PATH · PAISE_AUTH_SECRET · OTP_DELIVERY ·
                     OTP_TTL_MS · OTP_MAX_ATTEMPTS · SESSION_TTL_MS ·
@@ -460,12 +578,18 @@ frontend/
     Skeleton.jsx    Skeleton · SkeletonReveal · SkeletonSwap · SkeletonGroup
                     (the measure/settle/wipe pipeline above)
     skeletons/      eight per-shape silhouettes matched to real components
-    AskSheet.jsx    341 lines — dialog semantics (focus trap, Escape, focus
-                    restore), body scroll lock, seeded thread cascade,
-                    drag wiring on phone only, and a streamed answer that
-                    aborts when the sheet closes
+    AskSheet.jsx    dialog semantics (focus trap, Escape, focus restore), body
+                    scroll lock, seeded thread cascade, drag wiring on phone
+                    only, a streamed answer that aborts when the sheet closes,
+                    and AnswerBody — prose and charts interleaved as the
+                    tokens arrive
     PageMotion.jsx  lane-based route direction inference
-    TrendCard.jsx   self-fetching Jun/Jul/Aug bars
+    ChatChart.jsx   the eight chart presets an answer can ask for. Owns every
+                    visual decision; the model only names a shape and points
+                    at data.
+    TrendCard.jsx   the design's seeded trend card — now a spec handed to
+                    ChatChart, so the shipped card and a generated one are
+                    literally the same component
     Amount.jsx      regex-splits copy to tint ₹ figures
   lib/
     session.js      72 lines — where the bearer token lives, and the note on
@@ -477,6 +601,9 @@ frontend/
                     machines, settings write-through, dismissal set
     format.js       rupees · signedRupees · pct · shortDate · cardDate ·
                     monthLabel · MASK, all en-IN
+    chartSpec.js    splits a streaming answer into prose and chart blocks,
+                    then validates and bounds every field of the spec. The
+                    trust boundary between model output and the DOM.
     useSheetDrag.js 225 lines of pointer physics, detents, fling detection
     useMinDuration.js  400ms skeleton floor
     useDismissed.js    account-scoped "Not now", backed by /api/dismissed

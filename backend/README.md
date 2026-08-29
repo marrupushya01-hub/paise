@@ -64,23 +64,25 @@ Everything under `/api` except the two entry points requires
 | GET | `/api/auth/me` | 🔐 | Profile + settings for the token |
 | POST | `/api/auth/logout` | 🔐 | Revokes this session |
 | POST | `/api/auth/logout-all` | 🔐 | Revokes every session for the account |
-| GET | `/api/user-data` | 🔐 | Net worth, milestones, safe-to-spend, forecast, categories, transactions (with detail), connected accounts |
+| GET | `/api/user-data` | 🔐 | Net worth, milestones, safe-to-spend, forecast, categories, the 12 most recent transactions (with detail), connected accounts |
+| GET | `/api/transactions` | 🔐 | The full six-month ledger. `?month=YYYY-MM&category=<slug>&direction=in\|out&limit=&offset=` |
 | GET | `/api/portfolio` | 🔐 | Portfolio figures, holdings, active SIPs, goals |
 | GET | `/api/profile` | 🔐 | Name, initials, phone, age |
 | GET | `/api/insights` | 🔐 | Home assistant cards. `?tone=Direct\|Warm` |
 | GET | `/api/screen-insights` | 🔐 | Money / Invest cards. `?screen=money\|invest` |
 | GET | `/api/subscriptions` | 🔐 | Recurring charges. `?forgotten=true` to filter |
-| GET | `/api/spending-trend` | 🔐 | `?category=<slug>&months=1-12` |
+| GET | `/api/spending-trend` | 🔐 | `?category=<slug>&months=1-24` (six months of data exist) |
 | GET | `/api/settings` | 🔐 | `{ privacyMode, tone }` |
 | PATCH | `/api/settings` | 🔐 | Same shape, partial |
 | GET | `/api/dismissed` | 🔐 | Insight ids closed with "Not now" |
 | POST | `/api/dismissed` | 🔐 | `{ insightId }` |
 | DELETE | `/api/dismissed/:insightId` | 🔐 | Undo a dismissal |
-| POST | `/api/ask` | 🔐 | `{ question }` → `{ answer }`, or SSE. 10/min |
+| POST | `/api/ask` | 🔐 | `{ question }` → `{ answer }`, or SSE. The answer may carry a fenced ```paise-chart``` block. 10/min |
 
-Category slugs (used by `/api/user-data`'s `categories` and by
-`/api/spending-trend`): `food-delivery`, `rent`, `travel-cabs`,
-`subscriptions`, `shopping`.
+Category slugs (used by `/api/user-data`'s `categories`, `/api/transactions`
+and `/api/spending-trend`): `food-delivery`, `rent`, `travel-cabs`,
+`subscriptions`, `shopping`. `/api/spending-trend` also accepts the reserved
+slug `all`, which is total spend per month.
 
 ### `/api/user-data` shape
 
