@@ -124,23 +124,32 @@ export default function AskSheet() {
     const text = question.trim();
     if (!text || pending) return;
 
-    setThread((t) => [...t, { role: "user", text }]);
+    setThread((t) => [...t, { id: `ask-${Date.now()}`, role: "user", text }]);
     setDraft("");
     setPending(true);
 
     const controller = new AbortController();
     askAbort.current = controller;
 
-    let slot = -1;
+    // The streamed answer is addressed by id, and the text it is set to is
+    // accumulated out here rather than read back off the previous state.
+    //
+    // It used to capture the row's index inside the state updater and mutate
+    // that captured variable — which is exactly the impurity StrictMode's
+    // double-invoke exists to surface: the second call saw a slot the first
+    // had already claimed, indexed a row that did not exist yet in the base
+    // array, and threw on the first token of every answer.
+    const id = `answer-${Date.now()}`;
+    let full = "";
+
     const appendToken = (token) => {
+      full += token;
       setThread((t) => {
+        const at = t.findIndex((m) => m.id === id);
+        const row = { id, role: "paise", text: full, streaming: true };
+        if (at === -1) return [...t, row];
         const next = [...t];
-        if (slot === -1) {
-          slot = next.length;
-          next.push({ role: "paise", text: token, streaming: true });
-        } else {
-          next[slot] = { ...next[slot], text: next[slot].text + token };
-        }
+        next[at] = row;
         return next;
       });
       // The pending row goes away on the first token, not at the end.
@@ -149,17 +158,19 @@ export default function AskSheet() {
 
     try {
       const answer = await askStream(text, { onToken: appendToken, signal: controller.signal });
+      const finished = { id, role: "paise", text: answer || full };
       setThread((t) => {
+        const at = t.findIndex((m) => m.id === id);
+        if (at === -1) return [...t, finished];
         const next = [...t];
-        if (slot === -1) next.push({ role: "paise", text: answer });
-        else next[slot] = { role: "paise", text: answer || next[slot].text };
+        next[at] = finished;
         return next;
       });
     } catch (err) {
       if (err.name === "AbortError") return;
       setThread((t) => [
         ...t,
-        { role: "paise", text: `Couldn't reach Paise just now — ${err.message}` },
+        { id: `${id}-error`, role: "paise", text: `Couldn't reach Paise just now — ${err.message}` },
       ]);
     } finally {
       askAbort.current = null;
@@ -233,7 +244,7 @@ export default function AskSheet() {
         <div className="sheet__thread" ref={threadRef} {...threadProps}>
           {thread.map((item, i) => (
             <Message
-              key={i}
+              key={item.id ?? `seed-${i}`}
               item={item}
               delay={i < ASK_SEED.length ? 90 + i * SEED_STEP : 0}
               onSuggestion={send}
