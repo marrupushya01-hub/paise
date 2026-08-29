@@ -2,19 +2,24 @@
 
 import { useEffect, useState } from "react";
 import { getSpendingTrend } from "@/lib/api";
-import { monthLabel, rupees } from "@/lib/format";
+import { monthLabel } from "@/lib/format";
+import { usePaise } from "@/lib/store";
+import ChatChart from "./ChatChart";
 
-const BAR_MAX = 62; // px, matches the design's tallest bar
-const BAR_FILLS = ["#e8ddd3", "#d9b7a2", "#b25f3c"];
-
-// The little Jun/Jul/Aug chart inside the Ask sheet, fed by
+// The Jun/Jul/Aug chart the Ask sheet's seeded thread opens on, fed by
 // /api/spending-trend.
-export default function TrendCard({ category, title }) {
+//
+// It used to draw its own bars. Now it builds the same chart spec the model
+// emits and hands it to ChatChart — so the card the design shipped and the
+// cards an answer generates are literally the same component, and improving
+// one improves both.
+export default function TrendCard({ category, title, months = 3 }) {
+  const { userData } = usePaise();
   const [trend, setTrend] = useState(null);
 
   useEffect(() => {
     let cancelled = false;
-    getSpendingTrend(category, 3)
+    getSpendingTrend(category, months)
       .then((data) => {
         if (!cancelled) setTrend(data.trend || []);
       })
@@ -24,45 +29,21 @@ export default function TrendCard({ category, title }) {
     return () => {
       cancelled = true;
     };
-  }, [category]);
+  }, [category, months]);
 
   if (!trend || trend.length === 0) return null;
 
-  const max = Math.max(...trend.map((t) => t.amount));
-  const latest = trend[trend.length - 1];
-  const previous = trend[trend.length - 2];
-  const change = previous ? ((latest.amount - previous.amount) / previous.amount) * 100 : null;
-
   return (
-    <div className="trend-card">
-      <div className="eyebrow">{title}</div>
-      <div className="trend-card__chart">
-        {trend.map((point, i) => (
-          <div
-            key={point.month}
-            className={`trend-bar${i === trend.length - 1 ? " is-current" : ""}`}
-          >
-            <div
-              className="trend-bar__fill"
-              style={{
-                height: `${Math.max(Math.round((point.amount / max) * BAR_MAX), 12)}px`,
-                background: BAR_FILLS[i] || BAR_FILLS[BAR_FILLS.length - 1],
-              }}
-            />
-            <div className="trend-bar__label">{monthLabel(point.month)}</div>
-          </div>
-        ))}
-        <div className="spacer" />
-        <div className="trend-card__total">
-          <div className="trend-card__total-value">{rupees(latest.amount)}</div>
-          {change !== null && (
-            <div className="trend-card__total-delta">
-              {change >= 0 ? "+" : "−"}
-              {Math.abs(Math.round(change))}%
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
+    <ChatChart
+      categories={userData?.categories}
+      spec={{
+        type: trend.length === 1 ? "stat" : "bar",
+        title,
+        unit: "inr",
+        caption: null,
+        data: trend.map((point) => ({ label: monthLabel(point.month), value: point.amount })),
+        total: trend.reduce((sum, p) => sum + p.amount, 0),
+      }}
+    />
   );
 }
